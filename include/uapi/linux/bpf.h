@@ -5516,6 +5516,34 @@ union bpf_attr {
  *
  *	Return
  *		0
+ *
+ * long bpf_rbtree_first(struct bpf_map *map)
+ *	Description
+ *		Return the first node in the tree according to sort order
+ *
+ *	Return
+ *		If found, ptr to node, otherwise NULL
+ *
+ * long bpf_rbtree_last(struct bpf_map *map)
+ *	Description
+ *		Return the last node in the tree according to sort order
+ *
+ *	Return
+ *		If found, ptr to node, otherwise NULL
+ *
+ * long bpf_rbtree_next(struct bpf_map *map, void *cur)
+ *	Description
+ *		Return the next node in the tree according to sort order
+ *
+ *	Return
+ *		If found, ptr to node, otherwise NULL
+ *
+ * long bpf_rbtree_prev(struct bpf_map *map, void *cur)
+ *	Description
+ *		Return the previous node in the tree according to sort order
+ *
+ *	Return
+ *		If found, ptr to node, otherwise NULL
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5736,6 +5764,10 @@ union bpf_attr {
 	FN(rbtree_get_lock),		\
 	FN(rbtree_lock),		\
 	FN(rbtree_unlock),		\
+	FN(rbtree_first),		\
+	FN(rbtree_last),		\
+	FN(rbtree_next),		\
+	FN(rbtree_prev),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

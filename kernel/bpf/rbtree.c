@@ -174,6 +174,84 @@ const struct bpf_func_proto bpf_rbtree_find_proto = {
 	.arg3_type = ARG_PTR_TO_FUNC,
 };
 
+BPF_CALL_1(bpf_rbtree_first, struct bpf_map *, map)
+{
+	struct bpf_rbtree *tree = container_of(map, struct bpf_rbtree, map);
+
+	if (!__rbtree_lock_held(tree))
+		return (u64)NULL;
+
+	return (u64)rb_first_cached(&tree->root);
+}
+
+const struct bpf_func_proto bpf_rbtree_first_proto = {
+	.func = bpf_rbtree_first,
+	.gpl_only = true,
+	.ret_type = RET_PTR_TO_BTF_ID_OR_NULL | PTR_ITER | OBJ_NON_OWNING_REF,
+	.ret_btf_id = BPF_PTR_POISON,
+	.arg1_type = ARG_CONST_MAP_PTR,
+};
+
+BPF_CALL_1(bpf_rbtree_last, struct bpf_map *, map)
+{
+	struct bpf_rbtree *tree = container_of(map, struct bpf_rbtree, map);
+
+	if (!__rbtree_lock_held(tree))
+		return (u64)NULL;
+
+	return (u64)rb_last(&tree->root.rb_root);
+}
+
+const struct bpf_func_proto bpf_rbtree_last_proto = {
+	.func = bpf_rbtree_last,
+	.gpl_only = true,
+	.ret_type = RET_PTR_TO_BTF_ID_OR_NULL | PTR_ITER | OBJ_NON_OWNING_REF,
+	.ret_btf_id = BPF_PTR_POISON,
+	.arg1_type = ARG_CONST_MAP_PTR,
+};
+
+BPF_CALL_2(bpf_rbtree_next, struct bpf_map *, map, void *, cur)
+{
+	struct rb_node *next = rb_next((struct rb_node *)cur);
+	struct bpf_rbtree *tree = container_of(map, struct bpf_rbtree, map);
+
+	if (!__rbtree_lock_held(tree))
+		return (u64)NULL;
+
+	return (u64)next;
+}
+
+const struct bpf_func_proto bpf_rbtree_next_proto = {
+	.func = bpf_rbtree_next,
+	.gpl_only = true,
+	.ret_type = RET_PTR_TO_BTF_ID_OR_NULL | PTR_ITER_END | OBJ_NON_OWNING_REF,
+	.ret_btf_id = BPF_PTR_POISON,
+	.arg1_type = ARG_CONST_MAP_PTR,
+	.arg2_type = ARG_PTR_TO_BTF_ID | PTR_ITER,
+	.arg2_btf_id = BPF_PTR_POISON,
+};
+
+BPF_CALL_2(bpf_rbtree_prev, struct bpf_map *, map, void *, cur)
+{
+	struct rb_node *node = (struct rb_node *)cur;
+	struct bpf_rbtree *tree = container_of(map, struct bpf_rbtree, map);
+
+	if (!__rbtree_lock_held(tree))
+		return (u64)NULL;
+
+	return (u64)rb_prev(node);
+}
+
+const struct bpf_func_proto bpf_rbtree_prev_proto = {
+	.func = bpf_rbtree_prev,
+	.gpl_only = true,
+	.ret_type = RET_PTR_TO_BTF_ID_OR_NULL | PTR_ITER_END | OBJ_NON_OWNING_REF,
+	.ret_btf_id = BPF_PTR_POISON,
+	.arg1_type = ARG_CONST_MAP_PTR,
+	.arg2_type = ARG_PTR_TO_BTF_ID | PTR_ITER,
+	.arg2_btf_id = BPF_PTR_POISON,
+};
+
 /* Like rbtree_postorder_for_each_entry_safe, but 'pos' and 'n' are
  * 'rb_node *', so field name of rb_node within containing struct is not
  * needed.

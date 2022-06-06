@@ -485,6 +485,11 @@ static bool type_may_be_null(u32 type)
 	return type & PTR_MAYBE_NULL;
 }
 
+static bool type_is_iter(u32 type)
+{
+	return type & PTR_ITER || type & PTR_ITER_END;
+}
+
 static bool is_acquire_function(enum bpf_func_id func_id,
 				const struct bpf_map *map)
 {
@@ -587,7 +592,9 @@ static bool function_manipulates_rbtree_node(enum bpf_func_id func_id)
 {
 	return func_id == BPF_FUNC_rbtree_add ||
 		func_id == BPF_FUNC_rbtree_remove ||
-		func_id == BPF_FUNC_rbtree_free_node;
+		func_id == BPF_FUNC_rbtree_free_node ||
+		func_id == BPF_FUNC_rbtree_next ||
+		func_id == BPF_FUNC_rbtree_prev;
 }
 
 static bool function_returns_rbtree_node(enum bpf_func_id func_id)
@@ -595,7 +602,11 @@ static bool function_returns_rbtree_node(enum bpf_func_id func_id)
 	return func_id == BPF_FUNC_rbtree_alloc_node ||
 		func_id == BPF_FUNC_rbtree_find ||
 		func_id == BPF_FUNC_rbtree_add ||
-		func_id == BPF_FUNC_rbtree_remove;
+		func_id == BPF_FUNC_rbtree_remove ||
+		func_id == BPF_FUNC_rbtree_first ||
+		func_id == BPF_FUNC_rbtree_last ||
+		func_id == BPF_FUNC_rbtree_next ||
+		func_id == BPF_FUNC_rbtree_prev;
 }
 
 /* string representation of 'enum bpf_reg_type'
@@ -655,6 +666,12 @@ static const char *reg_type_str(struct bpf_verifier_env *env,
 		else
 			postfix_idx += strlcpy(postfix + postfix_idx, "_cond_rel",
 					       32 - postfix_idx);
+	}
+
+	if (type_is_iter(type)) {
+		postfix_idx += strlcpy(postfix + postfix_idx, "_iter", 32 - postfix_idx);
+		if (type & PTR_ITER_END)
+			postfix_idx += strlcpy(postfix + postfix_idx, "_end", 32 - postfix_idx);
 	}
 
 	if (type & MEM_RDONLY)
@@ -1489,7 +1506,7 @@ static void mark_ptr_not_null_reg(struct bpf_reg_state *reg)
 			   map->map_type == BPF_MAP_TYPE_SOCKHASH) {
 			reg->type = PTR_TO_SOCKET;
 		} else {
-			reg->type = PTR_TO_MAP_VALUE;
+			reg->type &= ~PTR_MAYBE_NULL;
 		}
 		return;
 	}
@@ -3080,6 +3097,11 @@ static bool __is_pointer_value(bool allow_ptr_leaks,
 		return false;
 
 	return reg->type != SCALAR_VALUE;
+}
+
+static bool __is_iter_end(const struct bpf_reg_state *reg)
+{
+	return reg->type & PTR_ITER_END;
 }
 
 static void save_register_state(struct bpf_func_state *state,
@@ -5775,6 +5797,8 @@ static const struct bpf_reg_types map_key_value_types = {
 		PTR_TO_PACKET_META,
 		PTR_TO_MAP_KEY,
 		PTR_TO_MAP_VALUE,
+		PTR_TO_MAP_VALUE | PTR_ITER,
+		PTR_TO_MAP_VALUE | PTR_ITER_END,
 	},
 };
 
@@ -5914,6 +5938,17 @@ static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
 	if (arg_type & PTR_MAYBE_NULL)
 		type &= ~PTR_MAYBE_NULL;
 
+	/* TYPE | PTR_ITER is valid input for helpers that expect TYPE
+	 * TYPE is not valid input for helpers that expect TYPE | PTR_ITER
+	 */
+	if (type_is_iter(arg_type)) {
+		if (!type_is_iter(type))
+			goto not_found;
+
+		type &= ~PTR_ITER;
+		type &= ~PTR_ITER_END;
+	}
+
 	for (i = 0; i < ARRAY_SIZE(compatible->types); i++) {
 		expected = compatible->types[i];
 		if (expected == NOT_INIT)
@@ -5923,6 +5958,7 @@ static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
 			goto found;
 	}
 
+not_found:
 	verbose(env, "R%d type=%s expected=", regno, reg_type_str(env, reg->type));
 	for (j = 0; j + 1 < i; j++)
 		verbose(env, "%s, ", reg_type_str(env, compatible->types[j]));
@@ -10019,6 +10055,17 @@ static int is_branch_taken(struct bpf_reg_state *reg, u64 val, u8 opcode,
 			   bool is_jmp32)
 {
 	if (__is_pointer_value(false, reg)) {
+		if (__is_iter_end(reg) && val == 0) {
+			__mark_reg_const_zero(reg);
+			switch (opcode) {
+			case BPF_JEQ:
+				return 1;
+			case BPF_JNE:
+				return 0;
+			default:
+				return -1;
+			}
+		}
 		if (!reg_type_not_null(reg->type))
 			return -1;
 
