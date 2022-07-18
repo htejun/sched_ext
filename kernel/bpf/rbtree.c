@@ -10,6 +10,7 @@
 struct bpf_rbtree {
 	struct bpf_map map;
 	struct rb_root_cached root;
+	struct bpf_spin_lock *lock;
 };
 
 static int rbtree_map_alloc_check(union bpf_attr *attr)
@@ -38,6 +39,14 @@ static struct bpf_map *rbtree_map_alloc(union bpf_attr *attr)
 
 	tree->root = RB_ROOT_CACHED;
 	bpf_map_init_from_attr(&tree->map, attr);
+
+	tree->lock = bpf_map_kzalloc(&tree->map, sizeof(struct bpf_spin_lock),
+				     GFP_KERNEL | __GFP_NOWARN);
+	if (!tree->lock) {
+		bpf_map_area_free(tree);
+		return ERR_PTR(-ENOMEM);
+	}
+
 	return &tree->map;
 }
 
@@ -139,6 +148,7 @@ static void rbtree_map_free(struct bpf_map *map)
 
 	bpf_rbtree_postorder_for_each_entry_safe(pos, n, &tree->root.rb_root)
 		kfree(pos);
+	kfree(tree->lock);
 	bpf_map_area_free(tree);
 }
 
@@ -237,6 +247,20 @@ static int rbtree_map_get_next_key(struct bpf_map *map, void *key,
 {
 	return -ENOTSUPP;
 }
+
+BPF_CALL_1(bpf_rbtree_get_lock, struct bpf_map *, map)
+{
+	struct bpf_rbtree *tree = container_of(map, struct bpf_rbtree, map);
+
+	return (u64)tree->lock;
+}
+
+const struct bpf_func_proto bpf_rbtree_get_lock_proto = {
+	.func = bpf_rbtree_get_lock,
+	.gpl_only = true,
+	.ret_type = RET_PTR_TO_MAP_VALUE,
+	.arg1_type = ARG_CONST_MAP_PTR,
+};
 
 BTF_ID_LIST_SINGLE(bpf_rbtree_map_btf_ids, struct, bpf_rbtree)
 const struct bpf_map_ops rbtree_map_ops = {

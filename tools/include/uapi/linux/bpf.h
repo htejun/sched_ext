@@ -5492,6 +5492,12 @@ union bpf_attr {
  *	Return
  *		0
  *
+ * void *bpf_rbtree_get_lock(struct bpf_map *map)
+ *	Description
+ *		Return the bpf_spin_lock associated with the rbtree
+ *
+ *	Return
+ *		Ptr to lock
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5709,6 +5715,7 @@ union bpf_attr {
 	FN(rbtree_find),		\
 	FN(rbtree_remove),		\
 	FN(rbtree_free_node),		\
+	FN(rbtree_get_lock),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
