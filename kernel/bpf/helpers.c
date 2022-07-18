@@ -316,7 +316,7 @@ static inline void __bpf_spin_unlock(struct bpf_spin_lock *lock)
 
 static DEFINE_PER_CPU(unsigned long, irqsave_flags);
 
-static inline void __bpf_spin_lock_irqsave(struct bpf_spin_lock *lock)
+inline void __bpf_spin_lock_irqsave(struct bpf_spin_lock *lock)
 {
 	unsigned long flags;
 
@@ -324,6 +324,7 @@ static inline void __bpf_spin_lock_irqsave(struct bpf_spin_lock *lock)
 	__bpf_spin_lock(lock);
 	__this_cpu_write(irqsave_flags, flags);
 }
+EXPORT_SYMBOL(__bpf_spin_lock_irqsave);
 
 notrace BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 {
@@ -338,7 +339,7 @@ const struct bpf_func_proto bpf_spin_lock_proto = {
 	.arg1_type	= ARG_PTR_TO_SPIN_LOCK,
 };
 
-static inline void __bpf_spin_unlock_irqrestore(struct bpf_spin_lock *lock)
+inline void __bpf_spin_unlock_irqrestore(struct bpf_spin_lock *lock)
 {
 	unsigned long flags;
 
@@ -346,6 +347,7 @@ static inline void __bpf_spin_unlock_irqrestore(struct bpf_spin_lock *lock)
 	__bpf_spin_unlock(lock);
 	local_irq_restore(flags);
 }
+EXPORT_SYMBOL(__bpf_spin_unlock_irqrestore);
 
 notrace BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 {
@@ -1572,6 +1574,8 @@ const struct bpf_func_proto bpf_rbtree_find_proto __weak;
 const struct bpf_func_proto bpf_rbtree_remove_proto __weak;
 const struct bpf_func_proto bpf_rbtree_free_node_proto __weak;
 const struct bpf_func_proto bpf_rbtree_get_lock_proto __weak;
+const struct bpf_func_proto bpf_rbtree_lock_proto __weak;
+const struct bpf_func_proto bpf_rbtree_unlock_proto __weak;
 
 const struct bpf_func_proto *
 bpf_base_func_proto(enum bpf_func_id func_id)
@@ -1681,6 +1685,10 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 		return &bpf_rbtree_free_node_proto;
 	case BPF_FUNC_rbtree_get_lock:
 		return &bpf_rbtree_get_lock_proto;
+	case BPF_FUNC_rbtree_lock:
+		return &bpf_rbtree_lock_proto;
+	case BPF_FUNC_rbtree_unlock:
+		return &bpf_rbtree_unlock_proto;
 	default:
 		break;
 	}

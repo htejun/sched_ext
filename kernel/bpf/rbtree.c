@@ -262,6 +262,35 @@ const struct bpf_func_proto bpf_rbtree_get_lock_proto = {
 	.arg1_type = ARG_CONST_MAP_PTR,
 };
 
+extern void __bpf_spin_unlock_irqrestore(struct bpf_spin_lock *lock);
+extern void __bpf_spin_lock_irqsave(struct bpf_spin_lock *lock);
+
+BPF_CALL_1(bpf_rbtree_lock, void *, lock)
+{
+	__bpf_spin_lock_irqsave((struct bpf_spin_lock *)lock);
+	return 0;
+}
+
+const struct bpf_func_proto bpf_rbtree_lock_proto = {
+	.func = bpf_rbtree_lock,
+	.gpl_only = true,
+	.ret_type = RET_INTEGER,
+	.arg1_type = ARG_PTR_TO_SPIN_LOCK,
+};
+
+BPF_CALL_1(bpf_rbtree_unlock, void *, lock)
+{
+	__bpf_spin_unlock_irqrestore((struct bpf_spin_lock *)lock);
+	return 0;
+}
+
+const struct bpf_func_proto bpf_rbtree_unlock_proto = {
+	.func = bpf_rbtree_unlock,
+	.gpl_only = true,
+	.ret_type = RET_INTEGER,
+	.arg1_type = ARG_PTR_TO_SPIN_LOCK,
+};
+
 BTF_ID_LIST_SINGLE(bpf_rbtree_map_btf_ids, struct, bpf_rbtree)
 const struct bpf_map_ops rbtree_map_ops = {
 	.map_meta_equal = bpf_map_meta_equal,

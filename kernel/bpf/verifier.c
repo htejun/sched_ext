@@ -6102,6 +6102,8 @@ skip_type_check:
 		} else if (meta->func_id == BPF_FUNC_spin_unlock) {
 			if (process_spin_lock(env, regno, false))
 				return -EACCES;
+		} else if (meta->func_id == BPF_FUNC_rbtree_lock ||
+			   meta->func_id == BPF_FUNC_rbtree_unlock) { // Do nothing for now
 		} else {
 			verbose(env, "verifier internal error\n");
 			return -EFAULT;

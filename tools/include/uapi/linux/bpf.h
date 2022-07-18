@@ -5498,6 +5498,24 @@ union bpf_attr {
  *
  *	Return
  *		Ptr to lock
+ *
+ * void *bpf_rbtree_lock(struct bpf_spin_lock *lock)
+ *	Description
+ *		Like bpf_spin_lock helper, but use separate helper for now
+ *		as we don't want this helper to have special meaning to the verifier
+ *		so that we can do rbtree helper calls between rbtree_lock/unlock
+ *
+ *	Return
+ *		0
+ *
+ * void *bpf_rbtree_unlock(struct bpf_spin_lock *lock)
+ *	Description
+ *		Like bpf_spin_unlock helper, but use separate helper for now
+ *		as we don't want this helper to have special meaning to the verifier
+ *		so that we can do rbtree helper calls between rbtree_lock/unlock
+ *
+ *	Return
+ *		0
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5716,6 +5734,8 @@ union bpf_attr {
 	FN(rbtree_remove),		\
 	FN(rbtree_free_node),		\
 	FN(rbtree_get_lock),		\
+	FN(rbtree_lock),		\
+	FN(rbtree_unlock),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
