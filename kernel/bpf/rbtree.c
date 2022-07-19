@@ -13,6 +13,11 @@ struct bpf_rbtree {
 	struct bpf_spin_lock *lock;
 };
 
+static bool __rbtree_lock_held(struct bpf_rbtree *tree)
+{
+	return spin_is_locked((spinlock_t *)tree->lock);
+}
+
 static int rbtree_map_alloc_check(union bpf_attr *attr)
 {
 	if (attr->max_entries || !attr->btf_value_type_id)
@@ -92,6 +97,9 @@ BPF_CALL_3(bpf_rbtree_add, struct bpf_map *, map, void *, value, void *, cb)
 	struct bpf_rbtree *tree = container_of(map, struct bpf_rbtree, map);
 	struct rb_node *node = (struct rb_node *)value;
 
+	if (!__rbtree_lock_held(tree))
+		return (u64)NULL;
+
 	if (WARN_ON_ONCE(!RB_EMPTY_NODE(node)))
 		return (u64)NULL;
 
@@ -113,6 +121,9 @@ const struct bpf_func_proto bpf_rbtree_add_proto = {
 BPF_CALL_3(bpf_rbtree_find, struct bpf_map *, map, void *, key, void *, cb)
 {
 	struct bpf_rbtree *tree = container_of(map, struct bpf_rbtree, map);
+
+	if (!__rbtree_lock_held(tree))
+		return (u64)NULL;
 
 	return (u64)rb_find(key, &tree->root.rb_root,
 			    (int (*)(const void *key,
@@ -205,6 +216,9 @@ BPF_CALL_2(bpf_rbtree_remove, struct bpf_map *, map, void *, value)
 {
 	struct bpf_rbtree *tree = container_of(map, struct bpf_rbtree, map);
 	struct rb_node *node = (struct rb_node *)value;
+
+	if (!__rbtree_lock_held(tree))
+		return (u64)NULL;
 
 	if (WARN_ON_ONCE(RB_EMPTY_NODE(node)))
 		return (u64)NULL;
