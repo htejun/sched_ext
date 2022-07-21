@@ -216,6 +216,7 @@ struct bpf_map {
 	int spin_lock_off; /* >=0 valid offset, <0 error */
 	struct bpf_map_value_off *kptr_off_tab;
 	int timer_off; /* >=0 valid offset, <0 error */
+	int rb_node_off; /* >=0 valid offset, <0 error */
 	u32 id;
 	int numa_node;
 	u32 btf_key_type_id;
@@ -263,6 +264,11 @@ static inline bool map_value_has_timer(const struct bpf_map *map)
 static inline bool map_value_has_kptrs(const struct bpf_map *map)
 {
 	return !IS_ERR_OR_NULL(map->kptr_off_tab);
+}
+
+static inline bool map_value_has_rb_node(const struct bpf_map *map)
+{
+	return map->rb_node_off >= 0;
 }
 
 static inline void check_and_init_map_value(struct bpf_map *map, void *dst)

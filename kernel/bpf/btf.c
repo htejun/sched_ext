@@ -3195,6 +3195,7 @@ enum btf_field_type {
 	BTF_FIELD_SPIN_LOCK,
 	BTF_FIELD_TIMER,
 	BTF_FIELD_KPTR,
+	BTF_FIELD_RB_NODE,
 };
 
 enum {
@@ -3282,6 +3283,7 @@ static int btf_find_struct_field(const struct btf *btf, const struct btf_type *t
 		switch (field_type) {
 		case BTF_FIELD_SPIN_LOCK:
 		case BTF_FIELD_TIMER:
+		case BTF_FIELD_RB_NODE:
 			ret = btf_find_struct(btf, member_type, off, sz,
 					      idx < info_cnt ? &info[idx] : &tmp);
 			if (ret < 0)
@@ -3332,6 +3334,7 @@ static int btf_find_datasec_var(const struct btf *btf, const struct btf_type *t,
 		switch (field_type) {
 		case BTF_FIELD_SPIN_LOCK:
 		case BTF_FIELD_TIMER:
+		case BTF_FIELD_RB_NODE:
 			ret = btf_find_struct(btf, var_type, off, sz,
 					      idx < info_cnt ? &info[idx] : &tmp);
 			if (ret < 0)
@@ -3374,6 +3377,11 @@ static int btf_find_field(const struct btf *btf, const struct btf_type *t,
 		sz = sizeof(struct bpf_timer);
 		align = __alignof__(struct bpf_timer);
 		break;
+	case BTF_FIELD_RB_NODE:
+		name = "rb_node";
+		sz = sizeof(struct rb_node);
+		align = __alignof__(struct rb_node);
+		break;
 	case BTF_FIELD_KPTR:
 		name = NULL;
 		sz = sizeof(u64);
@@ -3413,6 +3421,19 @@ int btf_find_timer(const struct btf *btf, const struct btf_type *t)
 	int ret;
 
 	ret = btf_find_field(btf, t, BTF_FIELD_TIMER, &info, 1);
+	if (ret < 0)
+		return ret;
+	if (!ret)
+		return -ENOENT;
+	return info.off;
+}
+
+int btf_find_rb_node(const struct btf *btf, const struct btf_type *t)
+{
+	struct btf_field_info info;
+	int ret;
+
+	ret = btf_find_field(btf, t, BTF_FIELD_RB_NODE, &info, 1);
 	if (ret < 0)
 		return ret;
 	if (!ret)
