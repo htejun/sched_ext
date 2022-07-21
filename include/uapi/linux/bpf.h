@@ -935,6 +935,7 @@ enum bpf_map_type {
 	BPF_MAP_TYPE_TASK_STORAGE,
 	BPF_MAP_TYPE_BLOOM_FILTER,
 	BPF_MAP_TYPE_USER_RINGBUF,
+	BPF_MAP_TYPE_RBTREE,
 };
 
 /* Note that tracing related programs such as
@@ -5435,6 +5436,62 @@ union bpf_attr {
  *		**-E2BIG** if user-space has tried to publish a sample which is
  *		larger than the size of the ring buffer, or which cannot fit
  *		within a struct bpf_dynptr.
+ *
+ * void *bpf_rbtree_alloc_node(struct bpf_map *map, u32 sz)
+ *	Description
+ *		Allocate a node of size *sz* bytes for use in rbtree *map*.
+ *
+ *		*sz* must be >= sizeof(struct rb_node)
+ *	Return
+ *		A pointer to the allocated node if successful, otherwise NULL.
+ *
+ *		The verifier considers the type of the returned pointer to be
+ *		the BTF id of *map*'s value type.
+ *
+ * void *bpf_rbtree_add(struct bpf_map *map, void *node, void *cb)
+ *	Description
+ *		Add *node* to rbtree *map* using *cb* comparator callback to
+ *		walk the rbtree.
+ *
+ *		*cb* must take (struct rb_node \*, const struct rb_node \*) as
+ *		input and return a bool signifying whether the first rb_node's
+ *		struct is less than the second.
+ *
+ *	Return
+ *		If success, returns a pointer to the added node in the rbtree.
+ *
+ *		If add fails, returns NULL
+ *
+ * long bpf_rbtree_find(struct bpf_map *map, void *key, void *cb)
+ *	Description
+ *		Find *key* in rbtree *map* using *cb* comparator callback to walk the
+ *		rbtree.
+ *
+ *		*cb* must take (const void \*key, const struct rb_node \*n) as
+ *		input and return an int. If *cb* determines *n* to match *key*, *cb* must
+ *		return 0. If larger, a positive int, and a negative int if smaller.
+ *
+ *		*key* does not need to be a rbtree node struct.
+ *
+ *	Return
+ *		Ptr to rbtree node if found, otherwise NULL.
+ *
+ * void *bpf_rbtree_remove(struct bpf_map *map, void *elem)
+ *	Description
+ *		Remove *elem* from rbtree *map*.
+ *
+ *	Return
+ *		If success, returns a pointer to the removed node.
+ *
+ *		If remove fails, returns NULL
+ *
+ * long bpf_rbtree_free_node(struct bpf_map *map, void *elem)
+ *	Description
+ *		Free rb_node that isn't associated w/ a tree.
+ *
+ *	Return
+ *		0
+ *
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5647,6 +5704,11 @@ union bpf_attr {
 	FN(tcp_raw_check_syncookie_ipv6),	\
 	FN(ktime_get_tai_ns),		\
 	FN(user_ringbuf_drain),		\
+	FN(rbtree_alloc_node),		\
+	FN(rbtree_add),			\
+	FN(rbtree_find),		\
+	FN(rbtree_remove),		\
+	FN(rbtree_free_node),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

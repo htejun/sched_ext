@@ -1566,6 +1566,11 @@ const struct bpf_func_proto bpf_probe_read_user_str_proto __weak;
 const struct bpf_func_proto bpf_probe_read_kernel_proto __weak;
 const struct bpf_func_proto bpf_probe_read_kernel_str_proto __weak;
 const struct bpf_func_proto bpf_task_pt_regs_proto __weak;
+const struct bpf_func_proto bpf_rbtree_alloc_node_proto __weak;
+const struct bpf_func_proto bpf_rbtree_add_proto __weak;
+const struct bpf_func_proto bpf_rbtree_find_proto __weak;
+const struct bpf_func_proto bpf_rbtree_remove_proto __weak;
+const struct bpf_func_proto bpf_rbtree_free_node_proto __weak;
 
 const struct bpf_func_proto *
 bpf_base_func_proto(enum bpf_func_id func_id)
@@ -1663,6 +1668,16 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 		return &bpf_dynptr_write_proto;
 	case BPF_FUNC_dynptr_data:
 		return &bpf_dynptr_data_proto;
+	case BPF_FUNC_rbtree_alloc_node:
+		return &bpf_rbtree_alloc_node_proto;
+	case BPF_FUNC_rbtree_add:
+		return &bpf_rbtree_add_proto;
+	case BPF_FUNC_rbtree_find:
+		return &bpf_rbtree_find_proto;
+	case BPF_FUNC_rbtree_remove:
+		return &bpf_rbtree_remove_proto;
+	case BPF_FUNC_rbtree_free_node:
+		return &bpf_rbtree_free_node_proto;
 	default:
 		break;
 	}

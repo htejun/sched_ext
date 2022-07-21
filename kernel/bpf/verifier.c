@@ -483,7 +483,9 @@ static bool is_acquire_function(enum bpf_func_id func_id,
 	    func_id == BPF_FUNC_sk_lookup_udp ||
 	    func_id == BPF_FUNC_skc_lookup_tcp ||
 	    func_id == BPF_FUNC_ringbuf_reserve ||
-	    func_id == BPF_FUNC_kptr_xchg)
+	    func_id == BPF_FUNC_kptr_xchg ||
+	    func_id == BPF_FUNC_rbtree_alloc_node ||
+	    func_id == BPF_FUNC_rbtree_remove)
 		return true;
 
 	if (func_id == BPF_FUNC_map_lookup_elem &&
@@ -531,6 +533,21 @@ static bool is_cmpxchg_insn(const struct bpf_insn *insn)
 	return BPF_CLASS(insn->code) == BPF_STX &&
 	       BPF_MODE(insn->code) == BPF_ATOMIC &&
 	       insn->imm == BPF_CMPXCHG;
+}
+
+static bool function_manipulates_rbtree_node(enum bpf_func_id func_id)
+{
+	return func_id == BPF_FUNC_rbtree_add ||
+		func_id == BPF_FUNC_rbtree_remove ||
+		func_id == BPF_FUNC_rbtree_free_node;
+}
+
+static bool function_returns_rbtree_node(enum bpf_func_id func_id)
+{
+	return func_id == BPF_FUNC_rbtree_alloc_node ||
+		func_id == BPF_FUNC_rbtree_find ||
+		func_id == BPF_FUNC_rbtree_add ||
+		func_id == BPF_FUNC_rbtree_remove;
 }
 
 /* string representation of 'enum bpf_reg_type'
@@ -3804,6 +3821,13 @@ static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
 	return 0;
 }
 
+static bool access_can_write_field(u32 access_off, size_t access_sz,
+				   u32 field_off, size_t field_sz)
+{
+	return access_off < field_off + field_sz &&
+		field_off < access_off + access_sz;
+}
+
 /* if any part of struct field can be touched by
  * load/store reject this program.
  * To check that [x1, x2) overlaps with [y1, y2)
@@ -4510,7 +4534,7 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 	const char *tname = btf_name_by_offset(reg->btf, t->name_off);
 	enum bpf_type_flag flag = 0;
 	u32 btf_id;
-	int ret;
+	int ret, rb_node_off;
 
 	if (off < 0) {
 		verbose(env,
@@ -4547,8 +4571,13 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 						  off, size, atype, &btf_id, &flag);
 	} else {
 		if (atype != BPF_READ) {
-			verbose(env, "only read is supported\n");
-			return -EACCES;
+			rb_node_off = btf_find_rb_node(reg->btf, t);
+			if (rb_node_off < 0 ||
+			    access_can_write_field(off, size, rb_node_off,
+						   sizeof(struct rb_node))) {
+				verbose(env, "only read is supported\n");
+				return -EACCES;
+			}
 		}
 
 		ret = btf_struct_access(&env->log, reg->btf, t, off, size,
@@ -5790,7 +5819,7 @@ static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
 	return -EACCES;
 
 found:
-	if (reg->type == PTR_TO_BTF_ID) {
+	if (base_type(reg->type) == PTR_TO_BTF_ID) {
 		/* For bpf_sk_release, it needs to match against first member
 		 * 'struct sock_common', hence make an exception for it. This
 		 * allows bpf_sk_release to work for multiple socket types.
@@ -5809,6 +5838,17 @@ found:
 		if (meta->func_id == BPF_FUNC_kptr_xchg) {
 			if (map_kptr_match_type(env, meta->kptr_off_desc, reg, regno))
 				return -EACCES;
+		} else if (function_manipulates_rbtree_node(meta->func_id)) {
+			if (!btf_struct_ids_match(&env->log, reg->btf, reg->btf_id, reg->off,
+						  meta->map_ptr->btf,
+						  meta->map_ptr->btf_value_type_id,
+						  strict_type_match)) {
+				verbose(env, "rbtree: R%d is of type %s but %s is expected\n",
+					regno, kernel_type_name(reg->btf, reg->btf_id),
+					kernel_type_name(meta->map_ptr->btf,
+							 meta->map_ptr->btf_value_type_id));
+				return -EACCES;
+			}
 		} else {
 			if (arg_btf_id == BPF_PTR_POISON) {
 				verbose(env, "verifier internal error:");
@@ -6447,10 +6487,17 @@ static int check_map_func_compatibility(struct bpf_verifier_env *env,
 		break;
 	case BPF_FUNC_map_pop_elem:
 		if (map->map_type != BPF_MAP_TYPE_QUEUE &&
+		    map->map_type != BPF_MAP_TYPE_RBTREE &&
 		    map->map_type != BPF_MAP_TYPE_STACK)
 			goto error;
 		break;
 	case BPF_FUNC_map_peek_elem:
+		if (map->map_type != BPF_MAP_TYPE_QUEUE &&
+		    map->map_type != BPF_MAP_TYPE_STACK &&
+		    map->map_type != BPF_MAP_TYPE_RBTREE &&
+		    map->map_type != BPF_MAP_TYPE_BLOOM_FILTER)
+			goto error;
+		break;
 	case BPF_FUNC_map_push_elem:
 		if (map->map_type != BPF_MAP_TYPE_QUEUE &&
 		    map->map_type != BPF_MAP_TYPE_STACK &&
@@ -6871,6 +6918,58 @@ static int set_loop_callback_state(struct bpf_verifier_env *env,
 
 	callee->in_callback_fn = true;
 	callee->callback_ret_range = tnum_range(0, 1);
+	return 0;
+}
+
+static int set_rbtree_add_callback_state(struct bpf_verifier_env *env,
+					 struct bpf_func_state *caller,
+					 struct bpf_func_state *callee,
+					 int insn_idx)
+{
+	struct bpf_map *map_ptr = caller->regs[BPF_REG_1].map_ptr;
+
+	/* bpf_rbtree_add(struct bpf_map *map, void *value, void *cb)
+	 * cb(struct rb_node *a, const struct rb_node *b);
+	 */
+	callee->regs[BPF_REG_1].type = PTR_TO_MAP_VALUE;
+	__mark_reg_known_zero(&callee->regs[BPF_REG_1]);
+	callee->regs[BPF_REG_1].map_ptr = map_ptr;
+
+	callee->regs[BPF_REG_2].type = PTR_TO_MAP_VALUE;
+	__mark_reg_known_zero(&callee->regs[BPF_REG_2]);
+	callee->regs[BPF_REG_2].map_ptr = map_ptr;
+
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_3]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
+	callee->in_callback_fn = true;
+	callee->callback_ret_range = tnum_range(0, 1);
+	return 0;
+}
+
+static int set_rbtree_find_callback_state(struct bpf_verifier_env *env,
+					  struct bpf_func_state *caller,
+					  struct bpf_func_state *callee,
+					  int insn_idx)
+{
+	struct bpf_map *map_ptr = caller->regs[BPF_REG_1].map_ptr;
+
+	/* bpf_rbtree_find(struct bpf_map *map, void *key, void *cb)
+	 * cb(void *key, const struct rb_node *b);
+	 */
+	callee->regs[BPF_REG_1].type = PTR_TO_MAP_VALUE;
+	__mark_reg_known_zero(&callee->regs[BPF_REG_1]);
+	callee->regs[BPF_REG_1].map_ptr = map_ptr;
+
+	callee->regs[BPF_REG_2].type = PTR_TO_MAP_VALUE;
+	__mark_reg_known_zero(&callee->regs[BPF_REG_2]);
+	callee->regs[BPF_REG_2].map_ptr = map_ptr;
+
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_3]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
+	callee->in_callback_fn = true;
+	callee->callback_ret_range = tnum_range(0, U64_MAX);
 	return 0;
 }
 
@@ -7392,6 +7491,14 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		err = __check_func_call(env, insn, insn_idx_p, meta.subprogno,
 					set_loop_callback_state);
 		break;
+	case BPF_FUNC_rbtree_add:
+		err = __check_func_call(env, insn, insn_idx_p, meta.subprogno,
+					set_rbtree_add_callback_state);
+		break;
+	case BPF_FUNC_rbtree_find:
+		err = __check_func_call(env, insn, insn_idx_p, meta.subprogno,
+					set_rbtree_find_callback_state);
+		break;
 	case BPF_FUNC_dynptr_from_mem:
 		if (regs[BPF_REG_1].type != PTR_TO_MAP_VALUE) {
 			verbose(env, "Unsupported reg type %s for bpf_dynptr_from_mem data\n",
@@ -7546,6 +7653,9 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		if (func_id == BPF_FUNC_kptr_xchg) {
 			ret_btf = meta.kptr_off_desc->kptr.btf;
 			ret_btf_id = meta.kptr_off_desc->kptr.btf_id;
+		} else if (function_returns_rbtree_node(func_id)) {
+			ret_btf = meta.map_ptr->btf;
+			ret_btf_id = meta.map_ptr->btf_value_type_id;
 		} else {
 			if (fn->ret_btf_id == BPF_PTR_POISON) {
 				verbose(env, "verifier internal error:");
@@ -13509,6 +13619,11 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 				insn->code = BPF_LDX | BPF_PROBE_MEM |
 					BPF_SIZE((insn)->code);
 				env->prog->aux->num_exentries++;
+			} else if (resolve_prog_type(env->prog) != BPF_PROG_TYPE_STRUCT_OPS) {
+				/*TODO: Not sure what to do here
+				verbose(env, "Writes through BTF pointers are not allowed\n");
+				return -EINVAL;
+				*/
 			}
 			continue;
 		default:
