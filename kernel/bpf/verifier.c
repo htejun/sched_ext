@@ -3804,6 +3804,19 @@ static int check_map_kptr_access(struct bpf_verifier_env *env, u32 regno,
 	return 0;
 }
 
+/* if any part of struct field can be touched by
+ * load/store reject this program.
+ * To check that [x1, x2) overlaps with [y1, y2)
+ * it is sufficient to check x1 < y2 && y1 < x2.
+ */
+static bool reg_access_may_touch_field(const struct bpf_reg_state *reg,
+				       u32 access_off, size_t access_sz,
+				       u32 field_off, size_t field_sz)
+{
+	return reg->smin_value + access_off < field_off + field_sz &&
+			field_off < reg->umax_value + access_off + access_sz;
+}
+
 /* check read/write into a map element with possible variable offset */
 static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 			    int off, int size, bool zero_size_allowed,
@@ -3821,15 +3834,9 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 		return err;
 
 	if (map_value_has_spin_lock(map)) {
-		u32 lock = map->spin_lock_off;
+		u32 t = map->spin_lock_off;
 
-		/* if any part of struct bpf_spin_lock can be touched by
-		 * load/store reject this program.
-		 * To check that [x1, x2) overlaps with [y1, y2)
-		 * it is sufficient to check x1 < y2 && y1 < x2.
-		 */
-		if (reg->smin_value + off < lock + sizeof(struct bpf_spin_lock) &&
-		     lock < reg->umax_value + off + size) {
+		if (reg_access_may_touch_field(reg, off, size, t, sizeof(struct bpf_spin_lock))) {
 			verbose(env, "bpf_spin_lock cannot be accessed directly by load/store\n");
 			return -EACCES;
 		}
@@ -3837,8 +3844,7 @@ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
 	if (map_value_has_timer(map)) {
 		u32 t = map->timer_off;
 
-		if (reg->smin_value + off < t + sizeof(struct bpf_timer) &&
-		     t < reg->umax_value + off + size) {
+		if (reg_access_may_touch_field(reg, off, size, t, sizeof(struct bpf_timer))) {
 			verbose(env, "bpf_timer cannot be accessed directly by load/store\n");
 			return -EACCES;
 		}
