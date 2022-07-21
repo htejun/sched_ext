@@ -144,7 +144,7 @@ BPF_CALL_3(bpf_rbtree_add, struct bpf_map *, map, void *, value, void *, cb)
 const struct bpf_func_proto bpf_rbtree_add_proto = {
 	.func = bpf_rbtree_add,
 	.gpl_only = true,
-	.ret_type = RET_PTR_TO_BTF_ID_OR_NULL | OBJ_NON_OWNING_REF,
+	.ret_type = RET_PTR_TO_BTF_ID_OR_NULL | OBJ_NON_OWNING_REF | CONDITIONAL_RELEASE,
 	.ret_btf_id = BPF_PTR_POISON,
 	.arg1_type = ARG_CONST_MAP_PTR,
 	.arg2_type = ARG_PTR_TO_BTF_ID | OBJ_RELEASE,

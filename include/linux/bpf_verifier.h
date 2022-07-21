@@ -325,6 +325,7 @@ struct bpf_verifier_state {
 	u32 curframe;
 	u32 active_spin_lock;
 	void *maybe_active_spin_lock_addr;
+	u32 active_cond_ref_obj_id;
 	bool speculative;
 
 	/* first and last insn idx of this verifier state */

@@ -475,6 +475,11 @@ static bool type_is_non_owning_ref(u32 type)
 	return type & OBJ_NON_OWNING_REF;
 }
 
+static bool type_is_cond_release(u32 type)
+{
+	return type & CONDITIONAL_RELEASE;
+}
+
 static bool type_may_be_null(u32 type)
 {
 	return type & PTR_MAYBE_NULL;
@@ -641,6 +646,15 @@ static const char *reg_type_str(struct bpf_verifier_env *env,
 			postfix_idx += strlcpy(postfix + postfix_idx, "non_own_", 32 - postfix_idx);
 		else
 			postfix_idx += strlcpy(postfix + postfix_idx, "_non_own", 32 - postfix_idx);
+	}
+
+	if (type_is_cond_release(type)) {
+		if (base_type(type) == PTR_TO_BTF_ID)
+			postfix_idx += strlcpy(postfix + postfix_idx, "cond_rel_",
+					       32 - postfix_idx);
+		else
+			postfix_idx += strlcpy(postfix + postfix_idx, "_cond_rel",
+					       32 - postfix_idx);
 	}
 
 	if (type & MEM_RDONLY)
@@ -1272,6 +1286,7 @@ static int copy_verifier_state(struct bpf_verifier_state *dst_state,
 	dst_state->curframe = src->curframe;
 	dst_state->active_spin_lock = src->active_spin_lock;
 	dst_state->maybe_active_spin_lock_addr = src->maybe_active_spin_lock_addr;
+	dst_state->active_cond_ref_obj_id = src->active_cond_ref_obj_id;
 	dst_state->branches = src->branches;
 	dst_state->parent = src->parent;
 	dst_state->first_insn_idx = src->first_insn_idx;
@@ -1479,6 +1494,7 @@ static void mark_ptr_not_null_reg(struct bpf_reg_state *reg)
 		return;
 	}
 
+	reg->type &= ~CONDITIONAL_RELEASE;
 	reg->type &= ~PTR_MAYBE_NULL;
 }
 
@@ -6757,26 +6773,81 @@ static void mark_pkt_end(struct bpf_verifier_state *vstate, int regn, bool range
 		reg->range = AT_PKT_END;
 }
 
+static int __release_reference(struct bpf_verifier_env *env, struct bpf_verifier_state *vstate,
+			       int ref_obj_id)
+{
+	struct bpf_func_state *state;
+	struct bpf_reg_state *reg;
+	int err;
+
+	err = release_reference_state(vstate->frame[vstate->curframe], ref_obj_id);
+	if (err)
+		return err;
+
+	bpf_for_each_reg_in_vstate(vstate, state, reg, ({
+		if (reg->ref_obj_id == ref_obj_id)
+			__mark_reg_unknown(env, reg);
+	}));
+	return 0;
+}
+
 /* The pointer with the specified id has released its reference to kernel
  * resources. Identify all copies of the same pointer and clear the reference.
  */
 static int release_reference(struct bpf_verifier_env *env,
 			     int ref_obj_id)
 {
-	struct bpf_func_state *state;
-	struct bpf_reg_state *reg;
-	int err;
+	return __release_reference(env, env->cur_state, ref_obj_id);
+}
 
-	err = release_reference_state(cur_func(env), ref_obj_id);
-	if (err)
-		return err;
+static void tag_reference_cond_release_regs(struct bpf_verifier_env *env,
+					    struct bpf_func_state *state,
+					    int ref_obj_id,
+					    bool remove)
+{
+	struct bpf_reg_state *regs = state->regs, *reg;
+	int i;
 
-	bpf_for_each_reg_in_vstate(env->cur_state, state, reg, ({
-		if (reg->ref_obj_id == ref_obj_id)
-			__mark_reg_unknown(env, reg);
-	}));
+	for (i = 0; i < MAX_BPF_REG; i++)
+		if (regs[i].ref_obj_id == ref_obj_id) {
+			if (remove)
+				regs[i].type &= ~CONDITIONAL_RELEASE;
+			else
+				regs[i].type |= CONDITIONAL_RELEASE;
+		}
 
-	return 0;
+	bpf_for_each_spilled_reg(i, state, reg) {
+		if (!reg)
+			continue;
+		if (reg->ref_obj_id == ref_obj_id) {
+			if (remove)
+				reg->type &= ~CONDITIONAL_RELEASE;
+			else
+				reg->type |= CONDITIONAL_RELEASE;
+		}
+	}
+}
+
+static void tag_reference_cond_release(struct bpf_verifier_env *env,
+				       int ref_obj_id)
+{
+	struct bpf_verifier_state *vstate = env->cur_state;
+	int i;
+
+	for (i = 0; i <= vstate->curframe; i++)
+		tag_reference_cond_release_regs(env, vstate->frame[i],
+						ref_obj_id, false);
+}
+
+static void untag_reference_cond_release(struct bpf_verifier_env *env,
+					 struct bpf_verifier_state *vstate,
+					 int ref_obj_id)
+{
+	int i;
+
+	for (i = 0; i <= vstate->curframe; i++)
+		tag_reference_cond_release_regs(env, vstate->frame[i],
+						ref_obj_id, true);
 }
 
 static void clear_non_owning_ref_regs(struct bpf_verifier_env *env,
@@ -7612,7 +7683,17 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		if (arg_type_is_dynptr(fn->arg_type[meta.release_regno - BPF_REG_1]))
 			err = unmark_stack_slots_dynptr(env, &regs[meta.release_regno]);
 		else if (meta.ref_obj_id)
-			err = release_reference(env, meta.ref_obj_id);
+			if (type_is_cond_release(fn->ret_type)) {
+				if (env->cur_state->active_cond_ref_obj_id) {
+					verbose(env, "can't handle >1 cond_release\n");
+					return err;
+				}
+				env->cur_state->active_cond_ref_obj_id = meta.ref_obj_id;
+				tag_reference_cond_release(env, meta.ref_obj_id);
+				err = 0;
+			} else {
+				err = release_reference(env, meta.ref_obj_id);
+			}
 		/* meta.ref_obj_id can only be 0 if register that is meant to be
 		 * released is NULL, which must be > R0.
 		 */
@@ -10281,7 +10362,7 @@ static void mark_ptr_or_null_reg(struct bpf_func_state *state,
  * be folded together at some point.
  */
 static void mark_ptr_or_null_regs(struct bpf_verifier_state *vstate, u32 regno,
-				  bool is_null)
+				  bool is_null, struct bpf_verifier_env *env)
 {
 	struct bpf_func_state *state = vstate->frame[vstate->curframe];
 	struct bpf_reg_state *regs = state->regs, *reg;
@@ -10294,6 +10375,16 @@ static void mark_ptr_or_null_regs(struct bpf_verifier_state *vstate, u32 regno,
 		 * doing the NULL check.
 		 */
 		WARN_ON_ONCE(release_reference_state(state, id));
+
+	if (type_is_cond_release(regs[regno].type)) {
+		if (!is_null) {
+			__release_reference(env, vstate, vstate->active_cond_ref_obj_id);
+			vstate->active_cond_ref_obj_id = 0;
+		} else {
+			untag_reference_cond_release(env, vstate, vstate->active_cond_ref_obj_id);
+			vstate->active_cond_ref_obj_id = 0;
+		}
+	}
 
 	bpf_for_each_reg_in_vstate(vstate, state, reg, ({
 		mark_ptr_or_null_reg(state, reg, id, is_null);
@@ -10594,9 +10685,9 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		 * safe or unknown depending R == 0 or R != 0 conditional.
 		 */
 		mark_ptr_or_null_regs(this_branch, insn->dst_reg,
-				      opcode == BPF_JNE);
+				      opcode == BPF_JNE, env);
 		mark_ptr_or_null_regs(other_branch, insn->dst_reg,
-				      opcode == BPF_JEQ);
+				      opcode == BPF_JEQ, env);
 	} else if (!try_match_pkt_pointers(insn, dst_reg, &regs[insn->src_reg],
 					   this_branch, other_branch) &&
 		   is_pointer_value(env, insn->dst_reg)) {
@@ -12051,6 +12142,9 @@ static bool states_equal(struct bpf_verifier_env *env,
 		return false;
 
 	if (old->active_spin_lock != cur->active_spin_lock)
+		return false;
+
+	if (old->active_cond_ref_obj_id != cur->active_cond_ref_obj_id)
 		return false;
 
 	/* for states to be equal callsites have to be the same
