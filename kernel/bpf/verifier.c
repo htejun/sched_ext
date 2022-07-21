@@ -470,6 +470,11 @@ static bool type_is_rdonly_mem(u32 type)
 	return type & MEM_RDONLY;
 }
 
+static bool type_is_non_owning_ref(u32 type)
+{
+	return type & OBJ_NON_OWNING_REF;
+}
+
 static bool type_may_be_null(u32 type)
 {
 	return type & PTR_MAYBE_NULL;
@@ -596,7 +601,9 @@ static bool function_returns_rbtree_node(enum bpf_func_id func_id)
 static const char *reg_type_str(struct bpf_verifier_env *env,
 				enum bpf_reg_type type)
 {
-	char postfix[16] = {0}, prefix[32] = {0};
+	char postfix[32] = {0}, prefix[32] = {0};
+	unsigned int postfix_idx = 0;
+
 	static const char * const str[] = {
 		[NOT_INIT]		= "?",
 		[SCALAR_VALUE]		= "scalar",
@@ -622,11 +629,18 @@ static const char *reg_type_str(struct bpf_verifier_env *env,
 		[PTR_TO_SPIN_LOCK]	= "spin_lock",
 	};
 
-	if (type & PTR_MAYBE_NULL) {
+	if (type_may_be_null(type)) {
 		if (base_type(type) == PTR_TO_BTF_ID)
-			strncpy(postfix, "or_null_", 16);
+			postfix_idx += strlcpy(postfix + postfix_idx, "or_null_", 32 - postfix_idx);
 		else
-			strncpy(postfix, "_or_null", 16);
+			postfix_idx += strlcpy(postfix + postfix_idx, "_or_null", 32 - postfix_idx);
+	}
+
+	if (type_is_non_owning_ref(type)) {
+		if (base_type(type) == PTR_TO_BTF_ID)
+			postfix_idx += strlcpy(postfix + postfix_idx, "non_own_", 32 - postfix_idx);
+		else
+			postfix_idx += strlcpy(postfix + postfix_idx, "_non_own", 32 - postfix_idx);
 	}
 
 	if (type & MEM_RDONLY)
@@ -5796,7 +5810,14 @@ static const struct bpf_reg_types int_ptr_types = {
 static const struct bpf_reg_types spin_lock_types = {
 	.types = {
 		PTR_TO_MAP_VALUE,
-		PTR_TO_SPIN_LOCK
+		PTR_TO_SPIN_LOCK,
+	},
+};
+
+static const struct bpf_reg_types btf_ptr_types = {
+	.types = {
+		PTR_TO_BTF_ID,
+		PTR_TO_BTF_ID | OBJ_NON_OWNING_REF,
 	},
 };
 
@@ -5805,7 +5826,6 @@ static const struct bpf_reg_types scalar_types = { .types = { SCALAR_VALUE } };
 static const struct bpf_reg_types context_types = { .types = { PTR_TO_CTX } };
 static const struct bpf_reg_types alloc_mem_types = { .types = { PTR_TO_MEM | MEM_ALLOC } };
 static const struct bpf_reg_types const_map_ptr_types = { .types = { CONST_PTR_TO_MAP } };
-static const struct bpf_reg_types spin_lock_types = { .types = { PTR_TO_MAP_VALUE } };
 static const struct bpf_reg_types percpu_btf_ptr_types = { .types = { PTR_TO_BTF_ID | MEM_PERCPU } };
 static const struct bpf_reg_types func_ptr_types = { .types = { PTR_TO_FUNC } };
 static const struct bpf_reg_types stack_ptr_types = { .types = { PTR_TO_STACK } };
@@ -6759,6 +6779,33 @@ static int release_reference(struct bpf_verifier_env *env,
 	return 0;
 }
 
+static void clear_non_owning_ref_regs(struct bpf_verifier_env *env,
+				      struct bpf_func_state *state)
+{
+	struct bpf_reg_state *regs = state->regs, *reg;
+	int i;
+
+	for (i = 0; i < MAX_BPF_REG; i++)
+		if (type_is_non_owning_ref(regs[i].type))
+			mark_reg_unknown(env, regs, i);
+
+	bpf_for_each_spilled_reg(i, state, reg) {
+		if (!reg)
+			continue;
+		if (type_is_non_owning_ref(reg->type))
+			__mark_reg_unknown(env, reg);
+	}
+}
+
+static void clear_rbtree_node_non_owning_refs(struct bpf_verifier_env *env)
+{
+	struct bpf_verifier_state *vstate = env->cur_state;
+	int i;
+
+	for (i = 0; i <= vstate->curframe; i++)
+		clear_non_owning_ref_regs(env, vstate->frame[i]);
+}
+
 static void clear_caller_saved_regs(struct bpf_verifier_env *env,
 				    struct bpf_reg_state *regs)
 {
@@ -7668,6 +7715,12 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	case BPF_FUNC_user_ringbuf_drain:
 		err = __check_func_call(env, insn, insn_idx_p, meta.subprogno,
 					set_user_ringbuf_callback_state);
+		break;
+	case BPF_FUNC_rbtree_unlock:
+		/* TODO clear_rbtree_node_non_owning_refs calls should be
+		 * parametrized by base_type or ideally by owning map
+		 */
+		clear_rbtree_node_non_owning_refs(env);
 		break;
 	}
 
