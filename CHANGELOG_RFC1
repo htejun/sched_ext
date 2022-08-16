@@ -1,0 +1,18 @@
+RFCv1 -> RFCv2: lore.kernel.org/bpf/20220722183438.3319790-1-davemarchevsky@fb.com
+
+Major changes:
+  * Add new patch ("bpf: Add verifier check for BPF_PTR_POISON retval and arg"),
+    use BPF_PTR_POISON as placeholder btf_id for helpers which return or
+    manipulate structs which contain rbtree node. (Alexei)
+    * Migrate all rbtree helpers to use BPF_PTR_POISON
+    * Testing this patch uncovered that rbtree_find was not in
+      function_returns_rbtree_node check, add it. Rbtree_add was not
+      setting a return btf_id type, fix that as well.
+
+Minor changes:
+  * patch "bpf: Add rbtree map"
+    * Alloc nodes w/ GFP_NOWAIT instead of GFP_KERNEL (Yonghong, Alexei)
+    * Rename access_may_touch_field -> access_can_write_field (Alexei)
+  * patch "bpf: Add CONDITIONAL_RELEASE type flag"
+    * No need to return int from mark_ptr_or_null_regs, go back to returning
+      void (Alexei)
