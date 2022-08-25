@@ -11,12 +11,18 @@ struct node_data {
 	__u32 two;
 };
 
+long calls;
+struct bpf_spin_lock rbtree_lock SEC(".bss.private");
+
 struct {
 	__uint(type, BPF_MAP_TYPE_RBTREE);
 	__type(value, struct node_data);
-} rbtree SEC(".maps");
-
-long calls;
+	__array(lock, struct bpf_spin_lock);
+} rbtree SEC(".maps") = {
+	.lock = {
+		[0] = &rbtree_lock,
+	},
+};
 
 static bool less(struct rb_node *a, const struct rb_node *b)
 {

@@ -11,10 +11,17 @@ struct node_data {
 	__u32 two;
 };
 
+struct bpf_spin_lock rbtree_lock SEC(".bss.private");
+
 struct {
 	__uint(type, BPF_MAP_TYPE_RBTREE);
 	__type(value, struct node_data);
-} rbtree SEC(".maps");
+	__array(lock, struct bpf_spin_lock);
+} rbtree SEC(".maps") = {
+	.lock = {
+		[0] = &rbtree_lock,
+	},
+};
 
 long calls;
 

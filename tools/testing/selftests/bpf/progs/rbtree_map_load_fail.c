@@ -14,11 +14,18 @@ struct node_data_no_rb_node {
 	__u64 seven;
 };
 
+struct bpf_spin_lock rbtree_lock SEC(".bss.private");
+
 /* Should fail because value struct has no rb_node
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_RBTREE);
 	__type(value, struct node_data_no_rb_node);
-} rbtree_fail_no_rb_node SEC(".maps");
+	__array(lock, struct bpf_spin_lock);
+} rbtree_fail_no_rb_node SEC(".maps") = {
+	.lock = {
+		[0] = &rbtree_lock,
+	},
+};
 
 char _license[] SEC("license") = "GPL";
