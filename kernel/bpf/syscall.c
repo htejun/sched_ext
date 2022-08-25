@@ -1070,6 +1070,12 @@ free_map_tab:
 	return ret;
 }
 
+static bool map_uses_map_extra(enum bpf_map_type type)
+{
+	return type == BPF_MAP_TYPE_BLOOM_FILTER ||
+	       type == BPF_MAP_TYPE_RBTREE;
+}
+
 #define BPF_MAP_CREATE_LAST_FIELD map_extra
 /* called via syscall */
 static int map_create(union bpf_attr *attr)
@@ -1091,7 +1097,7 @@ static int map_create(union bpf_attr *attr)
 		return -EINVAL;
 	}
 
-	if (attr->map_type != BPF_MAP_TYPE_BLOOM_FILTER &&
+	if (!map_uses_map_extra(attr->map_type) &&
 	    attr->map_extra != 0)
 		return -EINVAL;
 

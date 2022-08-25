@@ -1433,6 +1433,11 @@ bpf_object__init_kversion(struct bpf_object *obj, void *data, size_t size)
 	return 0;
 }
 
+static bool bpf_map_type__uses_lock_def(enum bpf_map_type type)
+{
+	return type == BPF_MAP_TYPE_RBTREE;
+}
+
 static bool bpf_map_type__is_map_in_map(enum bpf_map_type type)
 {
 	if (type == BPF_MAP_TYPE_ARRAY_OF_MAPS ||
@@ -1521,6 +1526,16 @@ static size_t bpf_map_mmap_sz(const struct bpf_map *map)
 	return map_sz;
 }
 
+static bool internal_map_in_custom_section(const char *real_name)
+{
+	if (strchr(real_name + 1, '.') != NULL) {
+		if (strcmp(real_name, BSS_SEC_PRIVATE) == 0)
+			return false;
+		return true;
+	}
+	return false;
+}
+
 static char *internal_map_name(struct bpf_object *obj, const char *real_name)
 {
 	char map_name[BPF_OBJ_NAME_LEN], *p;
@@ -1563,7 +1578,7 @@ static char *internal_map_name(struct bpf_object *obj, const char *real_name)
 		sfx_len = BPF_OBJ_NAME_LEN - 1;
 
 	/* if there are two or more dots in map name, it's a custom dot map */
-	if (strchr(real_name + 1, '.') != NULL)
+	if (internal_map_in_custom_section(real_name))
 		pfx_len = 0;
 	else
 		pfx_len = min((size_t)BPF_OBJ_NAME_LEN - sfx_len - 1, strlen(obj->name));
@@ -2346,10 +2361,23 @@ int parse_btf_map_def(const char *map_name, struct btf *btf,
 		} else if (strcmp(name, "map_extra") == 0) {
 			__u32 map_extra;
 
+			if (bpf_map_type__uses_lock_def(map_def->map_type)) {
+				pr_warn("map '%s': can't set map_extra for map using 'lock' def.\n",
+					map_name);
+				return -EINVAL;
+			}
+
 			if (!get_map_field_int(map_name, btf, m, &map_extra))
 				return -EINVAL;
 			map_def->map_extra = map_extra;
 			map_def->parts |= MAP_DEF_MAP_EXTRA;
+		} else if (strcmp(name, "lock") == 0) {
+			if (!bpf_map_type__uses_lock_def(map_def->map_type)) {
+				pr_warn("map '%s': can't set 'lock' for map.\n", map_name);
+				return -ENOTSUP;
+			}
+			/* TODO: More sanity checking
+			 */
 		} else {
 			if (strict) {
 				pr_warn("map '%s': unknown field '%s'.\n", map_name, name);
@@ -2624,8 +2652,8 @@ static int bpf_object__init_maps(struct bpf_object *obj,
 	strict = !OPTS_GET(opts, relaxed_maps, false);
 	pin_root_path = OPTS_GET(opts, pin_root_path, NULL);
 
-	err = err ?: bpf_object__init_user_btf_maps(obj, strict, pin_root_path);
 	err = err ?: bpf_object__init_global_data_maps(obj);
+	err = err ?: bpf_object__init_user_btf_maps(obj, strict, pin_root_path);
 	err = err ?: bpf_object__init_kconfig_map(obj);
 	err = err ?: bpf_object__init_struct_ops_maps(obj);
 
@@ -4895,6 +4923,25 @@ static bool map_is_reuse_compat(const struct bpf_map *map, int map_fd)
 		map_info.map_extra == map->map_extra);
 }
 
+static struct bpf_map *find_internal_map_by_shndx(struct bpf_object *obj,
+						  int shndx)
+{
+	struct bpf_map *map;
+	int i;
+
+	for (i = 0; i < obj->nr_maps; i++) {
+		map = &obj->maps[i];
+
+		if (!bpf_map__is_internal(map))
+			continue;
+
+		if (map->sec_idx == shndx)
+			return map;
+	}
+
+	return NULL;
+}
+
 static int
 bpf_object__reuse_map(struct bpf_map *map)
 {
@@ -5011,6 +5058,19 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 		}
 		if (map->inner_map_fd >= 0)
 			create_attr.inner_map_fd = map->inner_map_fd;
+	} else if (bpf_map_type__uses_lock_def(def->type)) {
+		if (map->init_slots_sz != 1) {
+			pr_warn("map '%s': expecting single lock def, actual count %d\n",
+				map->name, map->init_slots_sz);
+			return -EINVAL;
+		}
+
+		if (bpf_map__fd(map->init_slots[0]) < 0) {
+			pr_warn("map '%s': failed to find lock map fd\n", map->name);
+			return -EINVAL;
+		}
+
+		create_attr.map_extra |= (__u64)bpf_map__fd(map->init_slots[0]) << 32;
 	}
 
 	switch (def->type) {
@@ -5259,8 +5319,7 @@ retry:
 					goto err_out;
 				}
 			}
-
-			if (map->init_slots_sz && map->def.type != BPF_MAP_TYPE_PROG_ARRAY) {
+			if (map->init_slots_sz && bpf_map_type__is_map_in_map(map->def.type)) {
 				err = init_map_in_map_slots(obj, map);
 				if (err < 0) {
 					zclose(map->fd);
@@ -6454,9 +6513,9 @@ static int bpf_object__collect_map_relos(struct bpf_object *obj,
 	const struct btf_type *sec, *var, *def;
 	struct bpf_map *map = NULL, *targ_map = NULL;
 	struct bpf_program *targ_prog = NULL;
-	bool is_prog_array, is_map_in_map;
 	const struct btf_member *member;
 	const char *name, *mname, *type;
+	bool is_prog_array;
 	unsigned int moff;
 	Elf64_Sym *sym;
 	Elf64_Rel *rel;
@@ -6504,10 +6563,12 @@ static int bpf_object__collect_map_relos(struct bpf_object *obj,
 			return -EINVAL;
 		}
 
-		is_map_in_map = bpf_map_type__is_map_in_map(map->def.type);
+		/* PROG_ARRAY passes prog pointers using init_slots, other map
+		 * types pass map pointers
+		 */
 		is_prog_array = map->def.type == BPF_MAP_TYPE_PROG_ARRAY;
-		type = is_map_in_map ? "map" : "prog";
-		if (is_map_in_map) {
+		type = is_prog_array ? "prog" : "map";
+		if (bpf_map_type__is_map_in_map(map->def.type)) {
 			if (sym->st_shndx != obj->efile.btf_maps_shndx) {
 				pr_warn(".maps relo #%d: '%s' isn't a BTF-defined map\n",
 					i, name);
@@ -6539,6 +6600,24 @@ static int bpf_object__collect_map_relos(struct bpf_object *obj,
 					i, name);
 				return -LIBBPF_ERRNO__RELOC;
 			}
+		} else if (bpf_map_type__uses_lock_def(map->def.type)) {
+			targ_map = find_internal_map_by_shndx(obj, sym->st_shndx);
+			if (!targ_map) {
+				pr_warn(".maps relo #%d: '%s' isn't a valid map reference\n",
+					i, name);
+				return -LIBBPF_ERRNO__RELOC;
+			}
+
+			/* This shouldn't happen, check in parse_btf_map_def
+			 * should catch this, but to be safe let's prevent
+			 * map_extra overwrite
+			 */
+			if (map->map_extra) {
+				pr_warn(".maps rbtree relo #%d: map '%s' has ", i, map->name);
+				pr_warn("map_extra, can't relo lock, internal error.\n");
+				return -EINVAL;
+			}
+			map->map_extra = sym->st_value;
 		} else {
 			return -EINVAL;
 		}
@@ -6549,7 +6628,7 @@ static int bpf_object__collect_map_relos(struct bpf_object *obj,
 			return -EINVAL;
 		member = btf_members(def) + btf_vlen(def) - 1;
 		mname = btf__name_by_offset(obj->btf, member->name_off);
-		if (strcmp(mname, "values"))
+		if (strcmp(mname, "values") && strcmp(mname, "lock"))
 			return -EINVAL;
 
 		moff = btf_member_bit_offset(def, btf_vlen(def) - 1) / 8;
@@ -6573,7 +6652,7 @@ static int bpf_object__collect_map_relos(struct bpf_object *obj,
 			       (new_sz - map->init_slots_sz) * host_ptr_sz);
 			map->init_slots_sz = new_sz;
 		}
-		map->init_slots[moff] = is_map_in_map ? (void *)targ_map : (void *)targ_prog;
+		map->init_slots[moff] = is_prog_array ? (void *)targ_prog : (void *)targ_map;
 
 		pr_debug(".maps relo #%d: map '%s' slot [%d] points to %s '%s'\n",
 			 i, map->name, moff, type, name);

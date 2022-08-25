@@ -11,6 +11,7 @@ struct bpf_rbtree {
 	struct bpf_map map;
 	struct rb_root_cached root;
 	struct bpf_spin_lock *lock;
+	struct bpf_map *lock_map;
 };
 
 static bool __rbtree_lock_held(struct bpf_rbtree *tree)
@@ -26,10 +27,22 @@ static int rbtree_map_alloc_check(union bpf_attr *attr)
 	return 0;
 }
 
+static void __rbtree_map_free(struct bpf_rbtree *tree)
+{
+	if (tree->lock_map)
+		bpf_map_put(tree->lock_map);
+	else if (tree->lock)
+		kfree(tree->lock);
+	bpf_map_area_free(tree);
+}
+
 static struct bpf_map *rbtree_map_alloc(union bpf_attr *attr)
 {
+	u32 lock_map_ufd, lock_map_offset;
 	struct bpf_rbtree *tree;
+	u64 lock_map_addr;
 	int numa_node;
+	int err;
 
 	if (!bpf_capable())
 		return ERR_PTR(-EPERM);
@@ -45,14 +58,35 @@ static struct bpf_map *rbtree_map_alloc(union bpf_attr *attr)
 	tree->root = RB_ROOT_CACHED;
 	bpf_map_init_from_attr(&tree->map, attr);
 
-	tree->lock = bpf_map_kzalloc(&tree->map, sizeof(struct bpf_spin_lock),
-				     GFP_KERNEL | __GFP_NOWARN);
-	if (!tree->lock) {
-		bpf_map_area_free(tree);
-		return ERR_PTR(-ENOMEM);
+	if (!attr->map_extra) {
+		tree->lock = bpf_map_kzalloc(&tree->map, sizeof(struct bpf_spin_lock),
+					     GFP_KERNEL | __GFP_NOWARN);
+		if (!tree->lock) {
+			err = -ENOMEM;
+			goto err_free;
+		}
+	} else {
+		lock_map_ufd = (u32)(attr->map_extra >> 32);
+		lock_map_offset = (u32)attr->map_extra;
+		tree->lock_map = bpf_map_get(lock_map_ufd);
+		if (IS_ERR(tree->lock_map) || !tree->lock_map->ops->map_direct_value_addr) {
+			err = PTR_ERR(tree->lock_map);
+			tree->lock_map = NULL;
+			goto err_free;
+		}
+
+		err = tree->lock_map->ops->map_direct_value_addr(tree->lock_map, &lock_map_addr,
+								 lock_map_offset);
+		if (err)
+			goto err_free;
+
+		tree->lock = (struct bpf_spin_lock *)(lock_map_addr + lock_map_offset);
 	}
 
 	return &tree->map;
+err_free:
+	__rbtree_map_free(tree);
+	return ERR_PTR(err);
 }
 
 static struct rb_node *rbtree_map_alloc_node(struct bpf_map *map, size_t sz)
@@ -159,8 +193,7 @@ static void rbtree_map_free(struct bpf_map *map)
 
 	bpf_rbtree_postorder_for_each_entry_safe(pos, n, &tree->root.rb_root)
 		kfree(pos);
-	kfree(tree->lock);
-	bpf_map_area_free(tree);
+	__rbtree_map_free(tree);
 }
 
 static int rbtree_map_check_btf(const struct bpf_map *map,
