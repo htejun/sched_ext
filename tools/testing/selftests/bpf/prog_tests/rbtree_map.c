@@ -19,6 +19,7 @@ static struct {
 	{"rb_node__two_alloc_one_add", "Unreleased reference id=2 alloc_insn=3"},
 	{"rb_node__remove_no_free", "Unreleased reference id=6 alloc_insn=26"},
 	{"rb_tree__add_wrong_type", "rbtree: R2 is of type task_struct but node_data is expected"},
+	{"add_node__no_lock", "lock associated with rbtree is not held"},
 	{"rb_tree__conditional_release_helper_usage",
 		"R2 type=ptr_cond_rel_ expected=ptr_"},
 };
@@ -90,37 +91,6 @@ void test_rbtree_map_alloc_node__size_too_small(void)
 	syscall(SYS_getpgid);
 
 	ASSERT_EQ(skel->bss->size_too_small__alloc_fail, 1, "alloc_fail");
-
-	bpf_link__destroy(link);
-cleanup:
-	rbtree_map_fail__destroy(skel);
-}
-
-void test_rbtree_map_add_node__no_lock(void)
-{
-	struct rbtree_map_fail *skel;
-	struct bpf_program *prog;
-	struct bpf_link *link;
-	int err;
-
-	skel = rbtree_map_fail__open();
-	if (!ASSERT_OK_PTR(skel, "rbtree_map_fail__open"))
-		goto cleanup;
-
-	prog = skel->progs.add_node__no_lock;
-	bpf_program__set_autoload(prog, true);
-
-	err = rbtree_map_fail__load(skel);
-	if (!ASSERT_OK(err, "unexpected load fail"))
-		goto cleanup;
-
-	link = bpf_program__attach(skel->progs.add_node__no_lock);
-	if (!ASSERT_OK_PTR(link, "link"))
-		goto cleanup;
-
-	syscall(SYS_getpgid);
-
-	ASSERT_EQ(skel->bss->no_lock_add__fail, 1, "alloc_fail");
 
 	bpf_link__destroy(link);
 cleanup:
