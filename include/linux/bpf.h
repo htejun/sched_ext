@@ -547,6 +547,7 @@ enum bpf_return_type {
 	RET_PTR_TO_ALLOC_MEM,		/* returns a pointer to dynamically allocated memory */
 	RET_PTR_TO_MEM_OR_BTF_ID,	/* returns a pointer to a valid memory or a btf_id */
 	RET_PTR_TO_BTF_ID,		/* returns a pointer to a btf_id */
+	RET_PTR_TO_SPIN_LOCK,		/* returns a pointer to a struct bpf_spin_lock */
 	__BPF_RET_TYPE_MAX,
 
 	/* Extended ret_types. */
@@ -663,6 +664,7 @@ enum bpf_reg_type {
 	PTR_TO_BUF,		 /* reg points to a read/write buffer */
 	PTR_TO_FUNC,		 /* reg points to a bpf program function */
 	PTR_TO_DYNPTR,		 /* reg points to a dynptr */
+	PTR_TO_SPIN_LOCK,	 /* reg points to a struct bpf_spin_lock */
 	__BPF_REG_TYPE_MAX,
 
 	/* Extended reg_types. */

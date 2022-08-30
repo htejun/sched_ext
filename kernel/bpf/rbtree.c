@@ -305,7 +305,7 @@ BPF_CALL_1(bpf_rbtree_get_lock, struct bpf_map *, map)
 const struct bpf_func_proto bpf_rbtree_get_lock_proto = {
 	.func = bpf_rbtree_get_lock,
 	.gpl_only = true,
-	.ret_type = RET_PTR_TO_MAP_VALUE,
+	.ret_type = RET_PTR_TO_SPIN_LOCK,
 	.arg1_type = ARG_CONST_MAP_PTR,
 };
 

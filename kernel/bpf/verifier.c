@@ -453,8 +453,9 @@ static bool reg_type_not_null(enum bpf_reg_type type)
 
 static bool reg_may_point_to_spin_lock(const struct bpf_reg_state *reg)
 {
-	return reg->type == PTR_TO_MAP_VALUE &&
-		map_value_has_spin_lock(reg->map_ptr);
+	return (reg->type == PTR_TO_MAP_VALUE &&
+		map_value_has_spin_lock(reg->map_ptr)) ||
+		reg->type == PTR_TO_SPIN_LOCK;
 }
 
 static bool reg_type_may_be_refcounted_or_null(enum bpf_reg_type type)
@@ -506,6 +507,34 @@ static bool is_ptr_cast_function(enum bpf_func_id func_id)
 		func_id == BPF_FUNC_skc_to_mptcp_sock ||
 		func_id == BPF_FUNC_skc_to_tcp_timewait_sock ||
 		func_id == BPF_FUNC_skc_to_tcp_request_sock;
+}
+
+/* These functions can only be called when spinlock associated with rbtree
+ * is held. If they have a callback argument, that callback is not required
+ * to release active_spin_lock before exiting
+ */
+static bool is_rbtree_lock_required_function(enum bpf_func_id func_id)
+{
+	return func_id == BPF_FUNC_rbtree_add ||
+		func_id == BPF_FUNC_rbtree_remove ||
+		func_id == BPF_FUNC_rbtree_find ||
+		func_id == BPF_FUNC_rbtree_unlock;
+}
+
+/* These functions are OK to call when spinlock associated with rbtree
+ * is held.
+ */
+static bool is_rbtree_lock_ok_function(enum bpf_func_id func_id)
+{
+	return func_id == BPF_FUNC_rbtree_alloc_node ||
+		func_id == BPF_FUNC_rbtree_free_node ||
+		is_rbtree_lock_required_function(func_id);
+}
+
+static bool is_lock_allowed_function(enum bpf_func_id func_id)
+{
+	return func_id == BPF_FUNC_spin_unlock ||
+		is_rbtree_lock_ok_function(func_id);
 }
 
 static bool is_dynptr_ref_function(enum bpf_func_id func_id)
@@ -581,6 +610,7 @@ static const char *reg_type_str(struct bpf_verifier_env *env,
 		[PTR_TO_FUNC]		= "func",
 		[PTR_TO_MAP_KEY]	= "map_key",
 		[PTR_TO_DYNPTR]		= "dynptr_ptr",
+		[PTR_TO_SPIN_LOCK]	= "spin_lock",
 	};
 
 	if (type & PTR_MAYBE_NULL) {
@@ -1218,6 +1248,7 @@ static int copy_verifier_state(struct bpf_verifier_state *dst_state,
 	dst_state->speculative = src->speculative;
 	dst_state->curframe = src->curframe;
 	dst_state->active_spin_lock = src->active_spin_lock;
+	dst_state->maybe_active_spin_lock_addr = src->maybe_active_spin_lock_addr;
 	dst_state->branches = src->branches;
 	dst_state->parent = src->parent;
 	dst_state->first_insn_idx = src->first_insn_idx;
@@ -5509,6 +5540,35 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 			return -EINVAL;
 		}
 		cur->active_spin_lock = 0;
+		cur->maybe_active_spin_lock_addr = 0;
+	}
+	return 0;
+}
+
+static int rbtree_process_spin_lock(struct bpf_verifier_env *env, int regno,
+				    bool is_lock)
+{
+	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
+	struct bpf_verifier_state *cur = env->cur_state;
+
+	if (is_lock) {
+		if (cur->active_spin_lock) {
+			verbose(env,
+				"Locking two bpf_spin_locks are not allowed\n");
+			return -EINVAL;
+		}
+		cur->active_spin_lock = reg->id;
+	} else {
+		if (!cur->active_spin_lock) {
+			verbose(env, "rbtree_spin_unlock without taking a lock\n");
+			return -EINVAL;
+		}
+		if (cur->active_spin_lock != reg->id) {
+			verbose(env, "rbtree_spin_unlock of different lock\n");
+			return -EINVAL;
+		}
+		cur->active_spin_lock = 0;
+		cur->maybe_active_spin_lock_addr = 0;
 	}
 	return 0;
 }
@@ -5724,12 +5784,18 @@ static const struct bpf_reg_types int_ptr_types = {
 	},
 };
 
+static const struct bpf_reg_types spin_lock_types = {
+	.types = {
+		PTR_TO_MAP_VALUE,
+		PTR_TO_SPIN_LOCK
+	},
+};
+
 static const struct bpf_reg_types fullsock_types = { .types = { PTR_TO_SOCKET } };
 static const struct bpf_reg_types scalar_types = { .types = { SCALAR_VALUE } };
 static const struct bpf_reg_types context_types = { .types = { PTR_TO_CTX } };
 static const struct bpf_reg_types alloc_mem_types = { .types = { PTR_TO_MEM | MEM_ALLOC } };
 static const struct bpf_reg_types const_map_ptr_types = { .types = { CONST_PTR_TO_MAP } };
-static const struct bpf_reg_types btf_ptr_types = { .types = { PTR_TO_BTF_ID } };
 static const struct bpf_reg_types spin_lock_types = { .types = { PTR_TO_MAP_VALUE } };
 static const struct bpf_reg_types percpu_btf_ptr_types = { .types = { PTR_TO_BTF_ID | MEM_PERCPU } };
 static const struct bpf_reg_types func_ptr_types = { .types = { PTR_TO_FUNC } };
@@ -6102,8 +6168,12 @@ skip_type_check:
 		} else if (meta->func_id == BPF_FUNC_spin_unlock) {
 			if (process_spin_lock(env, regno, false))
 				return -EACCES;
-		} else if (meta->func_id == BPF_FUNC_rbtree_lock ||
-			   meta->func_id == BPF_FUNC_rbtree_unlock) { // Do nothing for now
+		} else if (meta->func_id == BPF_FUNC_rbtree_lock) {
+			if (rbtree_process_spin_lock(env, regno, true))
+				return -EACCES;
+		} else if (meta->func_id == BPF_FUNC_rbtree_unlock) {
+			if (rbtree_process_spin_lock(env, regno, false))
+				return -EACCES;
 		} else {
 			verbose(env, "verifier internal error\n");
 			return -EFAULT;
@@ -7056,6 +7126,29 @@ static int set_user_ringbuf_callback_state(struct bpf_verifier_env *env,
 	return 0;
 }
 
+/* Are we currently verifying the callback for a rbtree helper that must
+ * be called with lock held? If so, no need to complain about unreleased
+ * lock
+ */
+static bool in_rbtree_lock_required_cb(struct bpf_verifier_env *env)
+{
+	struct bpf_verifier_state *state = env->cur_state;
+	struct bpf_insn *insn = env->prog->insnsi;
+	struct bpf_func_state *callee;
+	int func_id;
+
+	if (!state->curframe)
+		return false;
+
+	callee = state->frame[state->curframe];
+
+	if (!callee->in_callback_fn)
+		return false;
+
+	func_id = insn[callee->callsite].imm;
+	return is_rbtree_lock_required_function(func_id);
+}
+
 static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 {
 	struct bpf_verifier_state *state = env->cur_state;
@@ -7592,6 +7685,11 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		    map_value_has_spin_lock(meta.map_ptr)) {
 			regs[BPF_REG_0].id = ++env->id_gen;
 		}
+		break;
+	case RET_PTR_TO_SPIN_LOCK:
+		mark_reg_known_zero(env, regs, BPF_REG_0);
+		regs[BPF_REG_0].type = PTR_TO_SPIN_LOCK | ret_flag;
+		regs[BPF_REG_0].id = ++env->id_gen;
 		break;
 	case RET_PTR_TO_SOCKET:
 		mark_reg_known_zero(env, regs, BPF_REG_0);
@@ -10423,6 +10521,20 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	return 0;
 }
 
+static unsigned int ld_imm_lock_id_gen(struct bpf_verifier_env *env,
+					     void *imm)
+{
+	struct bpf_verifier_state *cur = env->cur_state;
+
+	if (cur->active_spin_lock && cur->maybe_active_spin_lock_addr &&
+	    cur->maybe_active_spin_lock_addr == imm)
+		return cur->active_spin_lock;
+
+	if (!cur->active_spin_lock)
+		cur->maybe_active_spin_lock_addr = imm;
+	return ++env->id_gen;
+}
+
 /* verify BPF_LD_IMM64 instruction */
 static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 {
@@ -10430,6 +10542,7 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	struct bpf_reg_state *regs = cur_regs(env);
 	struct bpf_reg_state *dst_reg;
 	struct bpf_map *map;
+	u64 imm;
 	int err;
 
 	if (BPF_SIZE(insn->code) != BPF_DW) {
@@ -10447,7 +10560,7 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 
 	dst_reg = &regs[insn->dst_reg];
 	if (insn->src_reg == 0) {
-		u64 imm = ((u64)(insn + 1)->imm << 32) | (u32)insn->imm;
+		imm = ((u64)(insn + 1)->imm << 32) | (u32)insn->imm;
 
 		dst_reg->type = SCALAR_VALUE;
 		__mark_reg_known(&regs[insn->dst_reg], imm);
@@ -10498,13 +10611,14 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 
 	map = env->used_maps[aux->map_index];
 	dst_reg->map_ptr = map;
-
 	if (insn->src_reg == BPF_PSEUDO_MAP_VALUE ||
 	    insn->src_reg == BPF_PSEUDO_MAP_IDX_VALUE) {
 		dst_reg->type = PTR_TO_MAP_VALUE;
 		dst_reg->off = aux->map_off;
-		if (map_value_has_spin_lock(map))
-			dst_reg->id = ++env->id_gen;
+		if (map_value_has_spin_lock(map)) {
+			imm = ((u64)(insn + 1)->imm << 32) | (u32)insn->imm;
+			dst_reg->id = ld_imm_lock_id_gen(env, (void *)imm);
+		}
 	} else if (insn->src_reg == BPF_PSEUDO_MAP_FD ||
 		   insn->src_reg == BPF_PSEUDO_MAP_IDX) {
 		dst_reg->type = CONST_PTR_TO_MAP;
@@ -12489,7 +12603,7 @@ static int do_check(struct bpf_verifier_env *env)
 
 				if (env->cur_state->active_spin_lock &&
 				    (insn->src_reg == BPF_PSEUDO_CALL ||
-				     insn->imm != BPF_FUNC_spin_unlock)) {
+				     !is_lock_allowed_function(insn->imm))) {
 					verbose(env, "function calls are not allowed while holding a lock\n");
 					return -EINVAL;
 				}
@@ -12524,7 +12638,7 @@ static int do_check(struct bpf_verifier_env *env)
 					return -EINVAL;
 				}
 
-				if (env->cur_state->active_spin_lock) {
+				if (state->active_spin_lock && !in_rbtree_lock_required_cb(env)) {
 					verbose(env, "bpf_spin_unlock is missing\n");
 					return -EINVAL;
 				}
