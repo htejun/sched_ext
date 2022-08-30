@@ -17,7 +17,7 @@ static struct {
 	{"rb_node__field_store", "only read is supported"},
 	{"rb_node__alloc_no_add", "Unreleased reference id=2 alloc_insn=3"},
 	{"rb_node__two_alloc_one_add", "Unreleased reference id=2 alloc_insn=3"},
-	{"rb_node__remove_no_free", "Unreleased reference id=5 alloc_insn=28"},
+	{"rb_node__remove_no_free", "Unreleased reference id=6 alloc_insn=26"},
 	{"rb_tree__add_wrong_type", "rbtree: R2 is of type task_struct but node_data is expected"},
 	{"rb_tree__conditional_release_helper_usage",
 		"R2 type=ptr_cond_rel_ expected=ptr_"},

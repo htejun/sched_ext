@@ -65,6 +65,7 @@ int check_rbtree(void *ctx)
 	struct node_data *node, *found, *ret;
 	struct node_data popped;
 	struct node_data search;
+	struct bpf_spin_lock *lock;
 	__u32 search2;
 
 	node = bpf_rbtree_alloc_node(&rbtree, sizeof(struct node_data));
@@ -73,7 +74,8 @@ int check_rbtree(void *ctx)
 
 	node->one = calls;
 	node->two = 6;
-	bpf_rbtree_lock(bpf_rbtree_get_lock(&rbtree));
+	lock = &rbtree_lock;
+	bpf_rbtree_lock(lock);
 
 	ret = (struct node_data *)bpf_rbtree_add(&rbtree, node, less);
 	if (!ret) {
@@ -81,28 +83,28 @@ int check_rbtree(void *ctx)
 		goto unlock_ret;
 	}
 
-	bpf_rbtree_unlock(bpf_rbtree_get_lock(&rbtree));
+	bpf_rbtree_unlock(lock);
 
-	bpf_rbtree_lock(bpf_rbtree_get_lock(&rbtree));
+	bpf_rbtree_lock(lock);
 
 	search.one = calls;
 	found = (struct node_data *)bpf_rbtree_find(&rbtree, &search, cmp);
 	if (!found)
 		goto unlock_ret;
 
-	int node_ct = 0;
+	/*int node_ct = 0;
 	struct node_data *iter = (struct node_data *)bpf_rbtree_first(&rbtree);
 
 	while (iter) {
 		node_ct++;
 		iter = (struct node_data *)bpf_rbtree_next(&rbtree, iter);
-	}
+	}*/
 
 	ret = (struct node_data *)bpf_rbtree_remove(&rbtree, found);
 	if (!ret)
 		goto unlock_ret;
 
-	bpf_rbtree_unlock(bpf_rbtree_get_lock(&rbtree));
+	bpf_rbtree_unlock(lock);
 
 	bpf_rbtree_free_node(&rbtree, ret);
 
@@ -110,7 +112,7 @@ int check_rbtree(void *ctx)
 	return 0;
 
 unlock_ret:
-	bpf_rbtree_unlock(bpf_rbtree_get_lock(&rbtree));
+	bpf_rbtree_unlock(&rbtree_lock);
 	return 0;
 }
 

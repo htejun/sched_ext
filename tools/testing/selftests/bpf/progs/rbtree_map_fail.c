@@ -61,7 +61,7 @@ int alloc_node__size_too_small(void *ctx)
 		return 0;
 	}
 
-	bpf_rbtree_lock(bpf_rbtree_get_lock(&rbtree));
+	bpf_rbtree_lock(&rbtree_lock);
 	/* will never execute, alloc_node should fail */
 	node->one = 1;
 	ret = bpf_rbtree_add(&rbtree, node, less);
@@ -71,7 +71,7 @@ int alloc_node__size_too_small(void *ctx)
 	}
 
 unlock_ret:
-	bpf_rbtree_unlock(bpf_rbtree_get_lock(&rbtree));
+	bpf_rbtree_unlock(&rbtree_lock);
 	return 0;
 }
 
@@ -148,7 +148,7 @@ int rb_node__two_alloc_one_add(void *ctx)
 		return 0;
 	node->one = 42;
 
-	bpf_rbtree_lock(bpf_rbtree_get_lock(&rbtree));
+	bpf_rbtree_lock(&rbtree_lock);
 
 	ret = bpf_rbtree_add(&rbtree, node, less);
 	if (!ret) {
@@ -157,7 +157,7 @@ int rb_node__two_alloc_one_add(void *ctx)
 	}
 
 unlock_ret:
-	bpf_rbtree_unlock(bpf_rbtree_get_lock(&rbtree));
+	bpf_rbtree_unlock(&rbtree_lock);
 	return 0;
 }
 
@@ -171,7 +171,7 @@ int rb_node__remove_no_free(void *ctx)
 		return 0;
 	node->one = 42;
 
-	bpf_rbtree_lock(bpf_rbtree_get_lock(&rbtree));
+	bpf_rbtree_lock(&rbtree_lock);
 
 	ret = bpf_rbtree_add(&rbtree, node, less);
 	if (!ret) {
@@ -188,7 +188,7 @@ int rb_node__remove_no_free(void *ctx)
 	 */
 
 unlock_ret:
-	bpf_rbtree_unlock(bpf_rbtree_get_lock(&rbtree));
+	bpf_rbtree_unlock(&rbtree_lock);
 	return 0;
 }
 
@@ -202,14 +202,14 @@ int rb_tree__add_wrong_type(void *ctx)
 
 	task = bpf_get_current_task_btf();
 
-	bpf_rbtree_lock(bpf_rbtree_get_lock(&rbtree));
+	bpf_rbtree_lock(&rbtree_lock);
 
 	ret = bpf_rbtree_add(&rbtree, task, less);
 	/* Verifier should fail at bpf_rbtree_add, so don't bother handling
 	 * failure.
 	 */
 
-	bpf_rbtree_unlock(bpf_rbtree_get_lock(&rbtree));
+	bpf_rbtree_unlock(&rbtree_lock);
 	return 0;
 }
 
@@ -223,7 +223,7 @@ int rb_tree__conditional_release_helper_usage(void *ctx)
 		return 0;
 	node->one = 42;
 
-	bpf_rbtree_lock(bpf_rbtree_get_lock(&rbtree));
+	bpf_rbtree_lock(&rbtree_lock);
 
 	ret = bpf_rbtree_add(&rbtree, node, less);
 	/* Verifier should fail when trying to use CONDITIONAL_RELEASE
@@ -236,7 +236,7 @@ int rb_tree__conditional_release_helper_usage(void *ctx)
 	}
 
 unlock_ret:
-	bpf_rbtree_unlock(bpf_rbtree_get_lock(&rbtree));
+	bpf_rbtree_unlock(&rbtree_lock);
 	return 0;
 }
 
