@@ -245,6 +245,13 @@ static int rbtree_map_delete_elem(struct bpf_map *map, void *value)
 	return -ENOTSUPP;
 }
 
+static bool rbtree_map_lock_held(struct bpf_map *map, void *current_lock)
+{
+	struct bpf_rbtree *tree = container_of(map, struct bpf_rbtree, map);
+
+	return tree->lock == current_lock;
+}
+
 BPF_CALL_2(bpf_rbtree_remove, struct bpf_map *, map, void *, value)
 {
 	struct bpf_rbtree *tree = container_of(map, struct bpf_rbtree, map);
@@ -353,4 +360,5 @@ const struct bpf_map_ops rbtree_map_ops = {
 	.map_delete_elem = rbtree_map_delete_elem,
 	.map_check_btf = rbtree_map_check_btf,
 	.map_btf_id = &bpf_rbtree_map_btf_ids[0],
+	.map_lock_held = rbtree_map_lock_held,
 };

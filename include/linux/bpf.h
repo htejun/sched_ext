@@ -156,6 +156,8 @@ struct bpf_map_ops {
 				     bpf_callback_t callback_fn,
 				     void *callback_ctx, u64 flags);
 
+	bool (*map_lock_held)(struct bpf_map *map, void *current_lock);
+
 	/* BTF id of struct allocated by map_alloc */
 	int *map_btf_id;
 

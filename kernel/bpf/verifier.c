@@ -510,15 +510,24 @@ static bool is_ptr_cast_function(enum bpf_func_id func_id)
 }
 
 /* These functions can only be called when spinlock associated with rbtree
+ * is held. They all take struct bpf_map ptr to rbtree as their first argument,
+ * so we can verify that the correct lock is held before loading program
+ */
+static bool is_rbtree_lock_check_function(enum bpf_func_id func_id)
+{
+	return func_id == BPF_FUNC_rbtree_add ||
+		func_id == BPF_FUNC_rbtree_remove ||
+		func_id == BPF_FUNC_rbtree_find;
+}
+
+/* These functions can only be called when spinlock associated with rbtree
  * is held. If they have a callback argument, that callback is not required
  * to release active_spin_lock before exiting
  */
 static bool is_rbtree_lock_required_function(enum bpf_func_id func_id)
 {
-	return func_id == BPF_FUNC_rbtree_add ||
-		func_id == BPF_FUNC_rbtree_remove ||
-		func_id == BPF_FUNC_rbtree_find ||
-		func_id == BPF_FUNC_rbtree_unlock;
+	return func_id == BPF_FUNC_rbtree_unlock ||
+		is_rbtree_lock_check_function(func_id);
 }
 
 /* These functions are OK to call when spinlock associated with rbtree
@@ -7429,6 +7438,26 @@ static void update_loop_inline_state(struct bpf_verifier_env *env, u32 subprogno
 				 state->callback_subprogno == subprogno);
 }
 
+static int check_rbtree_lock_held(struct bpf_verifier_env *env,
+				  struct bpf_map *map)
+{
+	struct bpf_verifier_state *cur = env->cur_state;
+
+	if (!map)
+		return -1;
+
+	if (!cur->active_spin_lock || !cur->maybe_active_spin_lock_addr ||
+	    !map || !map->ops->map_lock_held)
+		return -1;
+
+	if (!map->ops->map_lock_held(map, cur->maybe_active_spin_lock_addr)) {
+		verbose(env, "active spin lock doesn't match rbtree's lock\n");
+		return -1;
+	}
+
+	return 0;
+}
+
 static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			     int *insn_idx_p)
 {
@@ -7644,6 +7673,12 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 
 	if (err)
 		return err;
+
+	if (is_rbtree_lock_check_function(func_id) &&
+	    check_rbtree_lock_held(env, meta.map_ptr)) {
+		verbose(env, "lock associated with rbtree is not held\n");
+		return -EINVAL;
+	}
 
 	/* reset caller saved regs */
 	for (i = 0; i < CALLER_SAVED_REGS; i++) {
