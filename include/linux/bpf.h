@@ -219,6 +219,7 @@ struct bpf_map {
 	struct bpf_map_value_off *kptr_off_tab;
 	int timer_off; /* >=0 valid offset, <0 error */
 	int rb_node_off; /* >=0 valid offset, <0 error */
+	bool map_val_ptr_to_rb_node; /* true if map_val is a ptr to type containing rb_node */
 	u32 id;
 	int numa_node;
 	u32 btf_key_type_id;
@@ -271,6 +272,11 @@ static inline bool map_value_has_kptrs(const struct bpf_map *map)
 static inline bool map_value_has_rb_node(const struct bpf_map *map)
 {
 	return map->rb_node_off >= 0;
+}
+
+static inline bool map_value_is_ptr_to_rb_node(const struct bpf_map *map)
+{
+	return map->map_val_ptr_to_rb_node;
 }
 
 static inline void check_and_init_map_value(struct bpf_map *map, void *dst)
@@ -1713,6 +1719,7 @@ void bpf_map_free_kptr_off_tab(struct bpf_map *map);
 struct bpf_map_value_off *bpf_map_copy_kptr_off_tab(const struct bpf_map *map);
 bool bpf_map_equal_kptr_off_tab(const struct bpf_map *map_a, const struct bpf_map *map_b);
 void bpf_map_free_kptrs(struct bpf_map *map, void *map_value);
+void bpf_map_free_ptr_rb_node_val(struct bpf_map *map, void *map_value);
 
 struct bpf_map *bpf_map_get(u32 ufd);
 struct bpf_map *bpf_map_get_with_uref(u32 ufd);

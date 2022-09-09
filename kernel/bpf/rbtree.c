@@ -423,6 +423,24 @@ const struct bpf_func_proto bpf_rbtree_unlock_proto = {
 	.arg1_type = ARG_PTR_TO_SPIN_LOCK,
 };
 
+BPF_CALL_3(bpf_rbtree_node_xchg, struct bpf_map *, map, void *, map_value, void *, ptr)
+{
+        unsigned long *kptr = map_value;
+
+        return xchg(kptr, (unsigned long)ptr);
+}
+
+const struct bpf_func_proto bpf_rbtree_node_xchg_proto = {
+	.func         = bpf_rbtree_node_xchg,
+	.gpl_only     = true,
+	.ret_type     = RET_PTR_TO_BTF_ID_OR_NULL,
+	.ret_btf_id   = BPF_PTR_POISON,
+	.arg1_type    = ARG_CONST_MAP_PTR,
+	.arg2_type    = ARG_ANYTHING,
+	.arg3_type    = ARG_PTR_TO_BTF_ID_OR_NULL | OBJ_RELEASE,
+	.arg3_btf_id  = BPF_PTR_POISON,
+};
+
 BTF_ID_LIST_SINGLE(bpf_rbtree_map_btf_ids, struct, bpf_rbtree)
 const struct bpf_map_ops rbtree_map_ops = {
 	.map_meta_equal = bpf_map_meta_equal,

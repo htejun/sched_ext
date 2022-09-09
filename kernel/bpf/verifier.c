@@ -501,7 +501,8 @@ static bool is_acquire_function(enum bpf_func_id func_id,
 	    func_id == BPF_FUNC_ringbuf_reserve ||
 	    func_id == BPF_FUNC_kptr_xchg ||
 	    func_id == BPF_FUNC_rbtree_alloc_node ||
-	    func_id == BPF_FUNC_rbtree_remove)
+	    func_id == BPF_FUNC_rbtree_remove ||
+	    func_id == BPF_FUNC_rbtree_node_xchg)
 		return true;
 
 	if (func_id == BPF_FUNC_map_lookup_elem &&
@@ -558,6 +559,7 @@ static bool is_rbtree_lock_ok_function(enum bpf_func_id func_id)
 static bool is_lock_allowed_function(enum bpf_func_id func_id)
 {
 	return func_id == BPF_FUNC_spin_unlock ||
+		func_id == BPF_FUNC_rbtree_node_xchg ||
 		is_rbtree_lock_ok_function(func_id);
 }
 
@@ -594,7 +596,8 @@ static bool function_manipulates_rbtree_node(enum bpf_func_id func_id)
 		func_id == BPF_FUNC_rbtree_remove ||
 		func_id == BPF_FUNC_rbtree_free_node ||
 		func_id == BPF_FUNC_rbtree_next ||
-		func_id == BPF_FUNC_rbtree_prev;
+		func_id == BPF_FUNC_rbtree_prev ||
+		func_id == BPF_FUNC_rbtree_node_xchg;
 }
 
 static bool function_returns_rbtree_node(enum bpf_func_id func_id)
@@ -606,7 +609,8 @@ static bool function_returns_rbtree_node(enum bpf_func_id func_id)
 		func_id == BPF_FUNC_rbtree_first ||
 		func_id == BPF_FUNC_rbtree_last ||
 		func_id == BPF_FUNC_rbtree_next ||
-		func_id == BPF_FUNC_rbtree_prev;
+		func_id == BPF_FUNC_rbtree_prev ||
+		func_id == BPF_FUNC_rbtree_node_xchg;
 }
 
 /* string representation of 'enum bpf_reg_type'
@@ -5989,7 +5993,8 @@ found:
 			if (!btf_struct_ids_match(&env->log, reg->btf, reg->btf_id, reg->off,
 						  meta->map_ptr->btf,
 						  meta->map_ptr->btf_value_type_id,
-						  strict_type_match)) {
+						  strict_type_match) &&
+			    meta->func_id != BPF_FUNC_rbtree_node_xchg) {
 				verbose(env, "rbtree: R%d is of type %s but %s is expected\n",
 					regno, kernel_type_name(reg->btf, reg->btf_id),
 					kernel_type_name(meta->map_ptr->btf,
@@ -6115,7 +6120,8 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 		return -EACCES;
 	}
 
-	if (base_type(arg_type) == ARG_PTR_TO_MAP_VALUE) {
+	if (base_type(arg_type) == ARG_PTR_TO_MAP_VALUE &&
+	    meta->func_id != BPF_FUNC_rbtree_node_xchg) {
 		err = resolve_map_arg_type(env, meta, &arg_type);
 		if (err)
 			return err;

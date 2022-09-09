@@ -606,6 +606,16 @@ void bpf_map_free_kptrs(struct bpf_map *map, void *map_value)
 	}
 }
 
+void bpf_map_free_ptr_rb_node_val(struct bpf_map *map, void *map_value)
+{
+	unsigned long *cur_ptr;
+	unsigned long old_ptr;
+
+	cur_ptr = (unsigned long *)map_value;
+	old_ptr = xchg(cur_ptr, 0);
+	kfree((void *)old_ptr);
+}
+
 /* called from workqueue */
 static void bpf_map_free_deferred(struct work_struct *work)
 {
@@ -1057,6 +1067,10 @@ static int map_check_btf(struct bpf_map *map, const struct btf *btf,
 	}
 
 	map->rb_node_off = btf_find_rb_node(btf, value_type);
+	if (btf_type_is_ptr(value_type) &&
+	    btf_find_rb_node(btf, btf_type_resolve_ptr(btf, btf_value_id, NULL)) >= 0) {
+			map->map_val_ptr_to_rb_node = true;
+	}
 
 	if (map->ops->map_check_btf) {
 		ret = map->ops->map_check_btf(map, btf, key_type, value_type);
@@ -1128,6 +1142,7 @@ static int map_create(union bpf_attr *attr)
 	map->spin_lock_off = -EINVAL;
 	map->timer_off = -EINVAL;
 	map->rb_node_off = -EINVAL;
+	map->map_val_ptr_to_rb_node = false;
 	if (attr->btf_key_type_id || attr->btf_value_type_id ||
 	    /* Even the map's value is a kernel's struct,
 	     * the bpf_prog.o must have BTF to begin with

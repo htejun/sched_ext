@@ -1580,6 +1580,7 @@ const struct bpf_func_proto bpf_rbtree_first_proto __weak;
 const struct bpf_func_proto bpf_rbtree_last_proto __weak;
 const struct bpf_func_proto bpf_rbtree_next_proto __weak;
 const struct bpf_func_proto bpf_rbtree_prev_proto __weak;
+const struct bpf_func_proto bpf_rbtree_node_xchg_proto __weak;
 
 const struct bpf_func_proto *
 bpf_base_func_proto(enum bpf_func_id func_id)
@@ -1701,6 +1702,8 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 		return &bpf_rbtree_next_proto;
 	case BPF_FUNC_rbtree_prev:
 		return &bpf_rbtree_prev_proto;
+	case BPF_FUNC_rbtree_node_xchg:
+		return &bpf_rbtree_node_xchg_proto;
 	default:
 		break;
 	}

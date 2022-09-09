@@ -5544,6 +5544,16 @@ union bpf_attr {
  *
  *	Return
  *		If found, ptr to node, otherwise NULL
+ *
+ * void *bpf_rbtree_node_xchg(struct bpf_map *map, void *map_value, void *ptr)
+ *	Description
+ *		Like bpf_kptr_xchg, but rbtree-specific for now to unblock Tejun.
+ *		Exchange rbtree node at pointer *map_value* with *ptr*, and return the
+ *		old value. *ptr* can be NULL, otherwise it must be a rbtree_node
+ *	Return
+ *		Old map_value (or NULL). If NULL, nothing needs to be done. If non-NULL,
+ *		the returned pointer is a reference to rbtree node which must be placed
+ *		in rbtree map, stashed somewhere else, or free'd before program exit.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5768,6 +5778,7 @@ union bpf_attr {
 	FN(rbtree_last),		\
 	FN(rbtree_next),		\
 	FN(rbtree_prev),		\
+	FN(rbtree_node_xchg),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

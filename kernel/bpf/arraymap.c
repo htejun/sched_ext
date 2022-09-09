@@ -312,6 +312,8 @@ static void check_and_free_fields(struct bpf_array *arr, void *val)
 		bpf_timer_cancel_and_free(val + arr->map.timer_off);
 	if (map_value_has_kptrs(&arr->map))
 		bpf_map_free_kptrs(&arr->map, val);
+	if (map_value_is_ptr_to_rb_node(&arr->map))
+		bpf_map_free_ptr_rb_node_val(&arr->map, val);
 }
 
 /* Called from syscall or from eBPF program */
