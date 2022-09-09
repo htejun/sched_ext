@@ -240,4 +240,49 @@ unlock_ret:
 	return 0;
 }
 
+/* pid -> node_data lookup */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 10000);
+	__type(key, __u32);
+	__type(value, struct node_data *);
+} hash_map SEC(".maps");
+
+struct node_data *empty_sentinel;
+#define STASH_TEST_PID 1234
+
+SEC("?fentry/" SYS_PREFIX "sys_getpgid")
+int rb_node__stash_no_check_xchg(void *ctx)
+{
+	struct node_data *node, *map_val;
+	int pid = STASH_TEST_PID;
+
+	map_val = bpf_map_lookup_elem(&hash_map, &pid);
+	if (!map_val) {
+		bpf_map_update_elem(&hash_map, &pid, &empty_sentinel, BPF_NOEXIST);
+		map_val = bpf_map_lookup_elem(&hash_map, &pid);
+		if (!map_val)
+			return 0;
+	}
+
+	node = bpf_rbtree_alloc_node(&rbtree, sizeof(struct node_data));
+	if (!node)
+		return 0;
+	node->one = 42;
+
+	bpf_rbtree_lock(&rbtree_lock);
+	node = bpf_rbtree_node_xchg(&rbtree, map_val, node);
+
+	/* Here there should be a check:
+	 * if (node) {
+	 *        bpf_rbtree_free_node(&rbtree, node);
+	 * }
+	 * because the ptr xchg'd into node, if non-NULL, is a rbtree node
+	 * that must be free'd or otherwise released
+	 */
+
+	bpf_rbtree_unlock(&rbtree_lock);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";

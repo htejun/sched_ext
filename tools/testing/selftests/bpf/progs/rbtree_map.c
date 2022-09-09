@@ -116,4 +116,85 @@ unlock_ret:
 	return 0;
 }
 
+/* pid -> node_data lookup */
+struct {
+        __uint(type, BPF_MAP_TYPE_HASH);
+        __uint(max_entries, 10000);
+        __type(key, __u32);
+        __type(value, struct node_data *);
+} hash_map SEC(".maps");
+
+int stash_calls;
+int do_unstash;
+struct node_data *empty_sentinel;
+#define STASH_TEST_PID 1234
+
+SEC("fentry/" SYS_PREFIX "sys_getpgid")
+int rb_node__stash(void *ctx)
+{
+        struct node_data *node, *map_val;
+        int pid = STASH_TEST_PID;
+
+	if (do_unstash)
+		return 0;
+
+	map_val = bpf_map_lookup_elem(&hash_map, &pid);
+        if (!map_val) {
+		bpf_map_update_elem(&hash_map, &pid, &empty_sentinel, BPF_NOEXIST);
+		map_val = bpf_map_lookup_elem(&hash_map, &pid);
+		if (!map_val)
+			return 0;
+	}
+
+	node = bpf_rbtree_alloc_node(&rbtree, sizeof(struct node_data));
+	if (!node)
+		return 0;
+	node->one = stash_calls;
+
+	bpf_rbtree_lock(&rbtree_lock);
+	node = bpf_rbtree_node_xchg(&rbtree, map_val, node);
+	if (node) {
+		bpf_rbtree_free_node(&rbtree, node);
+	}
+
+	bpf_rbtree_unlock(&rbtree_lock);
+	do_unstash = 1;
+	return 0;
+}
+
+SEC("fentry/" SYS_PREFIX "sys_getpgid")
+int rb_node__unstash(void *ctx)
+{
+	struct node_data *node = NULL, *map_val, *ret;
+	int pid = STASH_TEST_PID;
+
+	if (!do_unstash)
+		return 0;
+
+	map_val = bpf_map_lookup_elem(&hash_map, &pid);
+	if (!map_val)
+		return 0;
+
+	bpf_rbtree_lock(&rbtree_lock);
+	node = bpf_rbtree_node_xchg(&rbtree, map_val, node);
+	if (!node)
+		goto unlock_ret;
+	if (node->one != stash_calls) {
+		bpf_rbtree_free_node(&rbtree, node);
+		goto unlock_ret;
+	}
+
+	ret = (struct node_data *)bpf_rbtree_add(&rbtree, node, less);
+	if (!ret) {
+		bpf_rbtree_free_node(&rbtree, node);
+		goto unlock_ret;
+	}
+
+	stash_calls++;
+	do_unstash = 0;
+unlock_ret:
+	bpf_rbtree_unlock(&rbtree_lock);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";

@@ -22,6 +22,7 @@ static struct {
 	{"add_node__no_lock", "lock associated with rbtree is not held"},
 	{"rb_tree__conditional_release_helper_usage",
 		"R2 type=ptr_cond_rel_ expected=ptr_"},
+	{"rb_node__stash_no_check_xchg", "Unreleased reference id=7 alloc_insn=39"},
 };
 
 void test_rbtree_map_load_fail(void)
@@ -129,6 +130,36 @@ void test_rbtree_map(void)
 	ASSERT_EQ(skel->bss->calls, 100, "calls_equal");
 
 	bpf_link__destroy(link);
+cleanup:
+	rbtree_map__destroy(skel);
+}
+
+void test_rbtree_node_stash(void)
+{
+	struct rbtree_map *skel;
+	struct bpf_link *link_stash, *link_unstash;
+
+	skel = rbtree_map__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "rbtree_map__open_and_load"))
+		goto cleanup;
+
+	link_unstash = bpf_program__attach(skel->progs.rb_node__unstash);
+	if (!ASSERT_OK_PTR(link_unstash, "link_unstash"))
+		goto cleanup;
+
+	link_stash = bpf_program__attach(skel->progs.rb_node__stash);
+	if (!ASSERT_OK_PTR(link_stash, "link_stash"))
+		goto cleanup_link_unstash;
+
+	for (int i = 0; i < 100; i++) {
+		syscall(SYS_getpgid);
+		ASSERT_EQ(skel->bss->stash_calls, i + 1, "stash_calls_equal");
+	}
+	ASSERT_EQ(skel->bss->stash_calls, 100, "total_stashed");
+
+	bpf_link__destroy(link_stash);
+cleanup_link_unstash:
+	bpf_link__destroy(link_unstash);
 cleanup:
 	rbtree_map__destroy(skel);
 }
