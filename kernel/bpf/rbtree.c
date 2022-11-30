@@ -187,7 +187,7 @@ BPF_CALL_1(bpf_rbtree_first, struct bpf_map *, map)
 const struct bpf_func_proto bpf_rbtree_first_proto = {
 	.func = bpf_rbtree_first,
 	.gpl_only = true,
-	.ret_type = RET_PTR_TO_BTF_ID_OR_NULL | PTR_ITER | OBJ_NON_OWNING_REF,
+	.ret_type = RET_PTR_TO_BTF_ID_OR_NULL/* | PTR_ITER*/ | OBJ_NON_OWNING_REF,
 	.ret_btf_id = BPF_PTR_POISON,
 	.arg1_type = ARG_CONST_MAP_PTR,
 };
